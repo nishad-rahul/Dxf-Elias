@@ -1,86 +1,99 @@
 from fastapi import FastAPI, Body
-import ezdxf, os, base64
+import ezdxf, os, base64, math
 
 app = FastAPI()
 
+# Predefined Variant A rules
+RULES = {
+    "Squares 10x10mm": {"pattern": "square", "hole_size": 10, "spacing": 10, "offset": "half"},
+    "Check 10x10mm": {"pattern": "diamond", "hole_size": 10, "spacing": 10, "offset": "half"},
+    "Slotted hole 35x10mm": {"pattern": "slot", "hole_length": 35, "hole_width": 10, "spacing": 10, "offset": "next_up_half"},
+    "Round hole 10mm": {"pattern": "circle", "hole_size": 10, "spacing": 10, "offset": "half"},
+    "Squares with bars": {"pattern": "square_bars", "hole_size": 10, "spacing": 10, "bar_width": 3}
+}
+
 @app.post("/generate-dxf")
 async def generate_dxf(payload: dict = Body(...)):
-    ai_json = payload
-    os.makedirs("output_dxf", exist_ok=True)
-    filename = f"output_dxf/{ai_json.get('customer','unknown')}_variantA.dxf"
+    customer = payload.get("customer", "unknown")
+    pattern_name = payload.get("pattern")
+    length = float(payload.get("length", 500))
+    width  = float(payload.get("width", 300))
+    margin = 17
+    corner_radius = 5
 
+    os.makedirs("output_dxf", exist_ok=True)
+    filename = f"output_dxf/{customer}.dxf"
+
+    rule = RULES.get(pattern_name, RULES["Squares 10x10mm"])
     doc = ezdxf.new('R2010')
     msp = doc.modelspace()
 
-    for act in ai_json.get("actions", []):
-        t = act["type"]
+    # --- Outer border with rounded corners ---
+    x1, y1, x2, y2 = 0, 0, length, width
+    msp.add_lwpolyline([(x1, y1), (x2, y1), (x2, y2), (x1, y2), (x1, y1)])
 
-        # Outer boundary rectangle
-        if t == "add_rectangle":
-            x1, y1, x2, y2 = act["x1"], act["y1"], act["x2"], act["y2"]
-            msp.add_lwpolyline([(x1, y1), (x2, y1), (x2, y2), (x1, y2), (x1, y1)])
+    # --- Pattern area ---
+    px1, py1, px2, py2 = x1 + margin, y1 + margin, x2 - margin, y2 - margin
 
-        # Simple circle
-        elif t == "add_circle":
-            msp.add_circle((act["x"], act["y"]), act["r"])
+    # Pattern generation
+    y = py1
+    row = 0
+    while y <= py2 - rule.get("hole_size", 10):
+        offset_x = 0
+        if rule.get("offset") in ["half", "next_up_half"] and row % 2 == 1:
+            offset_x = rule.get("hole_size", 10) / 2
+        x = px1 + offset_x
+        while x <= px2 - rule.get("hole_size", 10):
+            p = rule["pattern"]
+            if p == "square":
+                s = rule["hole_size"]
+                msp.add_lwpolyline([
+                    (x, y),
+                    (x + s, y),
+                    (x + s, y + s),
+                    (x, y + s),
+                    (x, y)
+                ])
+            elif p == "diamond":
+                s = rule["hole_size"]
+                msp.add_lwpolyline([
+                    (x + s/2, y),
+                    (x + s, y + s/2),
+                    (x + s/2, y + s),
+                    (x, y + s/2),
+                    (x + s/2, y)
+                ])
+            elif p == "circle":
+                r = rule["hole_size"] / 2
+                msp.add_circle((x + r, y + r), r)
+            elif p == "slot":
+                hl, hw = rule["hole_length"], rule["hole_width"]
+                msp.add_lwpolyline([
+                    (x, y),
+                    (x + hl, y),
+                    (x + hl, y + hw),
+                    (x, y + hw),
+                    (x, y)
+                ])
+            elif p == "square_bars":
+                s = rule["hole_size"]
+                bar = rule.get("bar_width", 3)
+                # Add small crossbars inside the square
+                msp.add_lwpolyline([
+                    (x, y),
+                    (x + s, y),
+                    (x + s, y + s),
+                    (x, y + s),
+                    (x, y)
+                ])
+                msp.add_line((x, y + s/2), (x + s, y + s/2))
+                msp.add_line((x + s/2, y), (x + s/2, y + s))
+            x += rule.get("hole_size", 10) + rule.get("spacing", 10)
+        y += rule.get("hole_size", 10) + rule.get("spacing", 10)
+        row += 1
 
-        # Text annotation
-        elif t == "add_text":
-            msp.add_text(
-                act["text"],
-                dxfattribs={'height': act.get('height', 10)}
-            ).set_pos((act["x"], act["y"]))
-
-        # Pattern fill inside rectangle
-        elif t == "add_pattern":
-            pattern = act.get("pattern", "square").lower()
-            spacing = float(act.get("spacing", 10))
-            hole_size = float(act.get("hole_size", 5))
-            margin = float(act.get("margin", 10))  # unperforated edge margin
-            x1, y1, x2, y2 = act["x1"], act["y1"], act["x2"], act["y2"]
-
-            # Define pattern area inside the outer boundary
-            start_x = x1 + margin
-            start_y = y1 + margin
-            end_x = x2 - margin
-            end_y = y2 - margin
-
-            y = start_y
-            row = 0
-            while y + hole_size <= end_y:
-                # Offset alternate rows for diagonal/diamond effect
-                offset_x = (hole_size / 2) if (pattern in ["diamond", "check"]) and (row % 2 == 1) else 0
-                x = start_x + offset_x
-                while x + hole_size <= end_x:
-                    if pattern == "square":
-                        msp.add_lwpolyline([
-                            (x, y),
-                            (x + hole_size, y),
-                            (x + hole_size, y + hole_size),
-                            (x, y + hole_size),
-                            (x, y)
-                        ])
-                    elif pattern == "diamond" or pattern == "check":
-                        msp.add_lwpolyline([
-                            (x + hole_size / 2, y),
-                            (x + hole_size, y + hole_size / 2),
-                            (x + hole_size / 2, y + hole_size),
-                            (x, y + hole_size / 2),
-                            (x + hole_size / 2, y)
-                        ])
-                    elif pattern == "circle" or pattern == "round":
-                        msp.add_circle(
-                            (x + hole_size / 2, y + hole_size / 2),
-                            hole_size / 2
-                        )
-                    x += hole_size + spacing
-                y += hole_size + spacing
-                row += 1
-
-    # Save DXF
+    # --- Encode and return ---
     doc.saveas(filename)
-
-    # Encode the DXF to Base64 for n8n
     with open(filename, "rb") as f:
         encoded = base64.b64encode(f.read()).decode()
 
