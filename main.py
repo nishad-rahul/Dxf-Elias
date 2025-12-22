@@ -26,6 +26,19 @@ RULES = {
     },
 }
 
+# -----------------------------
+# Health Check + Root Endpoint
+# -----------------------------
+
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "DXF Generator API is live"}
+
+@app.get("/ping")
+def ping():
+    return {"ping": "pong"}
+
+
 # ------------------------------------
 # Dynamic DXF Generator
 # ------------------------------------
