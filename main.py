@@ -8,7 +8,7 @@ from ezdxf.render import forms
 app = FastAPI()
 
 # =========================================================
-# Pattern Normalization Map (matches n8n input exactly)
+# Pattern normalization (matches n8n input)
 # =========================================================
 PATTERN_MAP = {
     "Squares 10x10mm": {
@@ -39,148 +39,160 @@ PATTERN_MAP = {
 }
 
 # =========================================================
-# DXF Generator
+# DXF Generator Endpoint
 # =========================================================
 @app.post("/generate_dxf")
 async def generate_dxf(payload: dict = Body(...)):
+    try:
+        # -------------------------------------------------
+        # Handle n8n array input
+        # -------------------------------------------------
+        if isinstance(payload, list):
+            payload = payload[0]
 
-    # -----------------------------------------------------
-    # Handle n8n array input
-    # -----------------------------------------------------
-    if isinstance(payload, list):
-        payload = payload[0]
+        # -------------------------------------------------
+        # Normalize pattern
+        # -------------------------------------------------
+        raw_pattern = payload.get("pattern", "Squares 10x10mm")
+        if raw_pattern not in PATTERN_MAP:
+            return {"error": f"Unsupported pattern: {raw_pattern}"}
 
-    # -----------------------------------------------------
-    # Normalize pattern
-    # -----------------------------------------------------
-    raw_pattern = payload.get("pattern", "Squares 10x10mm")
-    if raw_pattern not in PATTERN_MAP:
-        return {"error": f"Unsupported pattern: {raw_pattern}"}
+        cfg = PATTERN_MAP[raw_pattern]
+        pattern = cfg["pattern"]
 
-    cfg = PATTERN_MAP[raw_pattern]
-    pattern = cfg["pattern"]
+        # -------------------------------------------------
+        # Dynamic inputs
+        # -------------------------------------------------
+        customer = str(payload.get("customer", "unknown")).replace(" ", "_")
+        length = float(payload.get("length", 500))
+        width = float(payload.get("width", 300))
+        border = float(payload.get("border", 17))
+        corner_radius = float(payload.get("corner_radius", 0))
 
-    # -----------------------------------------------------
-    # Dynamic inputs
-    # -----------------------------------------------------
-    customer = str(payload.get("customer", "unknown")).replace(" ", "_")
-    length = float(payload.get("length", 500))
-    width = float(payload.get("width", 300))
-    border = float(payload.get("border", 17))
-    corner_radius = float(payload.get("corner_radius", 0))
+        spacing = cfg.get("spacing", 10)
+        offset_mode = cfg.get("offset", "none")
 
-    spacing = cfg.get("spacing", 10)
-    offset_mode = cfg.get("offset", "none")
+        hole_size = cfg.get("hole_size", 10)
+        hole_diameter = cfg.get("hole_diameter", 10)
+        slot_length = cfg.get("slot_length", 35)
+        slot_width = cfg.get("slot_width", 10)
 
-    hole_size = cfg.get("hole_size", 10)
-    hole_diameter = cfg.get("hole_diameter", 10)
-    slot_length = cfg.get("slot_length", 35)
-    slot_width = cfg.get("slot_width", 10)
+        # -------------------------------------------------
+        # File setup
+        # -------------------------------------------------
+        os.makedirs("output_dxf", exist_ok=True)
+        filename = f"output_dxf/{customer}_{pattern}.dxf"
 
-    # -----------------------------------------------------
-    # File setup
-    # -----------------------------------------------------
-    os.makedirs("output_dxf", exist_ok=True)
-    filename = f"output_dxf/{customer}_{pattern}.dxf"
+        doc = ezdxf.new("R2010")
+        doc.units = ezdxf.units.MM
+        msp = doc.modelspace()
 
-    doc = ezdxf.new("R2010")
-    doc.units = ezdxf.units.MM
-    msp = doc.modelspace()
+        doc.layers.new(name="OUTLINE")
+        doc.layers.new(name="PATTERN")
 
-    doc.layers.new(name="OUTLINE")
-    doc.layers.new(name="PATTERN")
+        # -------------------------------------------------
+        # Outline (rounded rectangle)
+        # -------------------------------------------------
+        outline_path = forms.rect(length, width, radius=corner_radius)
+        outline = path.to_lwpolyline(outline_path, close=True)
+        outline.dxf.layer = "OUTLINE"
+        msp.add_entity(outline)
 
-    # -----------------------------------------------------
-    # Outline (rounded rectangle)
-    # -----------------------------------------------------
-    outline_path = forms.rect(length, width, radius=corner_radius)
-    outline = path.to_lwpolyline(outline_path, close=True)
-    outline.dxf.layer = "OUTLINE"
-    msp.add_entity(outline)
+        # -------------------------------------------------
+        # Pattern bounds
+        # -------------------------------------------------
+        px1, py1 = border, border
+        px2, py2 = length - border, width - border
 
-    # -----------------------------------------------------
-    # Pattern bounds
-    # -----------------------------------------------------
-    px1 = border
-    py1 = border
-    px2 = length - border
-    py2 = width - border
+        y = py1
+        row = 0
 
-    y = py1
-    row = 0
+        # -------------------------------------------------
+        # Pattern generation (CRASH-SAFE)
+        # -------------------------------------------------
+        while y < py2:
+            offset_x = hole_size / 2 if offset_mode == "half" and row % 2 else 0
+            x = px1 + offset_x
 
-    # -----------------------------------------------------
-    # Pattern generation
-    # -----------------------------------------------------
-    while y < py2:
-        offset_x = hole_size / 2 if offset_mode == "half" and row % 2 else 0
-        x = px1 + offset_x
+            while x < px2:
 
-        while x < px2:
+                # ---------- SQUARE ----------
+                if pattern == "square":
+                    s = hole_size
+                    if x + s <= px2 and y + s <= py2:
+                        msp.add_lwpolyline(
+                            [(x,y),(x+s,y),(x+s,y+s),(x,y+s),(x,y)],
+                            dxfattribs={"layer":"PATTERN"}
+                        )
+                    step_x = s
+                    step_y = s
 
-            # ---------- SQUARE ----------
-            if pattern == "square":
-                s = hole_size
-                if x + s <= px2 and y + s <= py2:
-                    msp.add_lwpolyline(
-                        [(x,y),(x+s,y),(x+s,y+s),(x,y+s),(x,y)],
-                        dxfattribs={"layer":"PATTERN"}
-                    )
-                step = s
+                # ---------- DIAMOND ----------
+                elif pattern == "diamond":
+                    s = hole_size
+                    cx, cy = x + s/2, y + s/2
+                    if x + s <= px2 and y + s <= py2:
+                        msp.add_lwpolyline(
+                            [(cx,y),(x+s,cy),(cx,y+s),(x,cy),(cx,y)],
+                            dxfattribs={"layer":"PATTERN"}
+                        )
+                    step_x = s
+                    step_y = s
 
-            # ---------- DIAMOND ----------
-            elif pattern == "diamond":
-                s = hole_size
-                cx, cy = x + s/2, y + s/2
-                if x + s <= px2 and y + s <= py2:
-                    msp.add_lwpolyline(
-                        [(cx,y),(x+s,cy),(cx,y+s),(x,cy),(cx,y)],
-                        dxfattribs={"layer":"PATTERN"}
-                    )
-                step = s
+                # ---------- CIRCLE ----------
+                elif pattern == "circle":
+                    d = hole_diameter
+                    r = d / 2
+                    if x + d <= px2 and y + d <= py2:
+                        msp.add_circle((x+r,y+r), r, dxfattribs={"layer":"PATTERN"})
+                    step_x = d
+                    step_y = d
 
-            # ---------- CIRCLE ----------
-            elif pattern == "circle":
-                r = hole_diameter / 2
-                if x + hole_diameter <= px2 and y + hole_diameter <= py2:
-                    msp.add_circle((x+r,y+r), r, dxfattribs={"layer":"PATTERN"})
-                step = hole_diameter
+                # ---------- SLOT ----------
+                elif pattern == "slot":
+                    hl, hw = slot_length, slot_width
+                    r = hw / 2
+                    if x + hl <= px2 and y + hw <= py2:
+                        msp.add_line((x+r,y+r),(x+hl-r,y+r), dxfattribs={"layer":"PATTERN"})
+                        msp.add_arc((x+r,y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
+                        msp.add_arc((x+hl-r,y+r), r, -90, 90, dxfattribs={"layer":"PATTERN"})
+                    step_x = hl
+                    step_y = hw
 
-            # ---------- SLOT ----------
-            elif pattern == "slot":
-                hl, hw = slot_length, slot_width
-                r = hw / 2
-                if x + hl <= px2 and y + hw <= py2:
-                    msp.add_line((x+r,y+r),(x+hl-r,y+r), dxfattribs={"layer":"PATTERN"})
-                    msp.add_arc((x+r,y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
-                    msp.add_arc((x+hl-r,y+r), r, -90, 90, dxfattribs={"layer":"PATTERN"})
-                step = hl
+                else:
+                    break
 
-            else:
-                break
+                x += step_x + spacing
 
-            x += step + spacing
+            y += step_y + spacing
+            row += 1
 
-        y += step + spacing
-        row += 1
+        # -------------------------------------------------
+        # AutoCAD viewport
+        # -------------------------------------------------
+        doc.set_modelspace_vport(
+            center=(length/2, width/2),
+            height=width * 1.1
+        )
 
-    # -----------------------------------------------------
-    # AutoCAD viewport
-    # -----------------------------------------------------
-    doc.set_modelspace_vport(center=(length/2,width/2), height=width*1.1)
+        # -------------------------------------------------
+        # Save & return
+        # -------------------------------------------------
+        doc.saveas(filename)
+        with open(filename, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode()
 
-    # -----------------------------------------------------
-    # Save & return
-    # -----------------------------------------------------
-    doc.saveas(filename)
-    with open(filename,"rb") as f:
-        encoded = base64.b64encode(f.read()).decode()
+        return {
+            "status": "ok",
+            "file_name": os.path.basename(filename),
+            "file_base64": encoded,
+            "length_mm": length,
+            "width_mm": width,
+            "pattern": raw_pattern
+        }
 
-    return {
-        "status": "ok",
-        "file_name": os.path.basename(filename),
-        "file_base64": encoded,
-        "length_mm": length,
-        "width_mm": width,
-        "pattern": raw_pattern
-    }
+    except Exception as e:
+        return {
+            "error": "DXF generation failed",
+            "details": str(e)
+        }
