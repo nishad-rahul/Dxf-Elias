@@ -2,12 +2,12 @@ from fastapi import FastAPI, Body
 import ezdxf
 import os
 import base64
-from ezdxf.path import Path
+import math
 
 app = FastAPI()
 
 # =========================================================
-# Pattern normalization (matches n8n input exactly)
+# Pattern normalization (matches n8n input)
 # =========================================================
 PATTERN_MAP = {
     "Squares 10x10mm": {
@@ -38,7 +38,7 @@ PATTERN_MAP = {
 }
 
 # =========================================================
-# Helper: Rounded Rectangle (version-safe)
+# Helper: Rounded rectangle using LINES + ARCS (SAFE)
 # =========================================================
 def draw_rounded_rectangle(msp, x, y, w, h, r, layer):
     if r <= 0:
@@ -48,22 +48,17 @@ def draw_rounded_rectangle(msp, x, y, w, h, r, layer):
         )
         return
 
-    p = Path((x + r, y))
-    p.line_to((x + w - r, y))
-    p.arc_to((x + w, y + r), r, clockwise=True)
+    # Lines
+    msp.add_line((x+r, y), (x+w-r, y), dxfattribs={"layer": layer})
+    msp.add_line((x+w, y+r), (x+w, y+h-r), dxfattribs={"layer": layer})
+    msp.add_line((x+w-r, y+h), (x+r, y+h), dxfattribs={"layer": layer})
+    msp.add_line((x, y+h-r), (x, y+r), dxfattribs={"layer": layer})
 
-    p.line_to((x + w, y + h - r))
-    p.arc_to((x + w - r, y + h), r, clockwise=True)
-
-    p.line_to((x + r, y + h))
-    p.arc_to((x, y + h - r), r, clockwise=True)
-
-    p.line_to((x, y + r))
-    p.arc_to((x + r, y), r, clockwise=True)
-
-    lw = p.to_lwpolyline()
-    lw.dxf.layer = layer
-    msp.add_entity(lw)
+    # Arcs (angles are AutoCAD degrees)
+    msp.add_arc((x+w-r, y+r), r, 270, 360, dxfattribs={"layer": layer})
+    msp.add_arc((x+w-r, y+h-r), r, 0, 90, dxfattribs={"layer": layer})
+    msp.add_arc((x+r, y+h-r), r, 90, 180, dxfattribs={"layer": layer})
+    msp.add_arc((x+r, y+r), r, 180, 270, dxfattribs={"layer": layer})
 
 # =========================================================
 # DXF Generator Endpoint
@@ -96,8 +91,8 @@ async def generate_dxf(payload: dict = Body(...)):
         border = float(payload.get("border", 17))
         corner_radius = float(payload.get("corner_radius", 0))
 
-        spacing = cfg.get("spacing", 10)
-        offset_mode = cfg.get("offset", "none")
+        spacing = cfg["spacing"]
+        offset_mode = cfg["offset"]
 
         hole_size = cfg.get("hole_size", 10)
         hole_diameter = cfg.get("hole_diameter", 10)
@@ -121,7 +116,7 @@ async def generate_dxf(payload: dict = Body(...)):
         # Outline
         # -------------------------------------------------
         draw_rounded_rectangle(
-            msp=msp,
+            msp,
             x=0,
             y=0,
             w=length,
@@ -140,7 +135,7 @@ async def generate_dxf(payload: dict = Body(...)):
         row = 0
 
         # -------------------------------------------------
-        # Pattern generation (crash-safe)
+        # Pattern generation (ABSOLUTE SAFE)
         # -------------------------------------------------
         while y < py2:
             offset_x = hole_size / 2 if offset_mode == "half" and row % 2 else 0
@@ -180,43 +175,3 @@ async def generate_dxf(payload: dict = Body(...)):
                     if x + hl <= px2 and y + hw <= py2:
                         msp.add_line((x+r,y+r),(x+hl-r,y+r), dxfattribs={"layer":"PATTERN"})
                         msp.add_arc((x+r,y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
-                        msp.add_arc((x+hl-r,y+r), r, -90, 90, dxfattribs={"layer":"PATTERN"})
-                    step_x, step_y = hl, hw
-
-                else:
-                    break
-
-                x += step_x + spacing
-
-            y += step_y + spacing
-            row += 1
-
-        # -------------------------------------------------
-        # Viewport
-        # -------------------------------------------------
-        doc.set_modelspace_vport(
-            center=(length / 2, width / 2),
-            height=width * 1.1
-        )
-
-        # -------------------------------------------------
-        # Save & return
-        # -------------------------------------------------
-        doc.saveas(filename)
-        with open(filename, "rb") as f:
-            encoded = base64.b64encode(f.read()).decode()
-
-        return {
-            "status": "ok",
-            "file_name": os.path.basename(filename),
-            "file_base64": encoded,
-            "length_mm": length,
-            "width_mm": width,
-            "pattern": raw_pattern
-        }
-
-    except Exception as e:
-        return {
-            "error": "DXF generation failed",
-            "details": str(e)
-        }
