@@ -2,13 +2,12 @@ from fastapi import FastAPI, Body
 import ezdxf
 import os
 import base64
-from ezdxf import path
-from ezdxf.render import forms
+from ezdxf.path import Path
 
 app = FastAPI()
 
 # =========================================================
-# Pattern normalization (matches n8n input)
+# Pattern normalization (matches n8n input exactly)
 # =========================================================
 PATTERN_MAP = {
     "Squares 10x10mm": {
@@ -37,6 +36,34 @@ PATTERN_MAP = {
         "offset": "half",
     },
 }
+
+# =========================================================
+# Helper: Rounded Rectangle (version-safe)
+# =========================================================
+def draw_rounded_rectangle(msp, x, y, w, h, r, layer):
+    if r <= 0:
+        msp.add_lwpolyline(
+            [(x,y),(x+w,y),(x+w,y+h),(x,y+h),(x,y)],
+            dxfattribs={"layer": layer}
+        )
+        return
+
+    p = Path((x + r, y))
+    p.line_to((x + w - r, y))
+    p.arc_to((x + w, y + r), r, clockwise=True)
+
+    p.line_to((x + w, y + h - r))
+    p.arc_to((x + w - r, y + h), r, clockwise=True)
+
+    p.line_to((x + r, y + h))
+    p.arc_to((x, y + h - r), r, clockwise=True)
+
+    p.line_to((x, y + r))
+    p.arc_to((x + r, y), r, clockwise=True)
+
+    lw = p.to_lwpolyline()
+    lw.dxf.layer = layer
+    msp.add_entity(lw)
 
 # =========================================================
 # DXF Generator Endpoint
@@ -91,12 +118,17 @@ async def generate_dxf(payload: dict = Body(...)):
         doc.layers.new(name="PATTERN")
 
         # -------------------------------------------------
-        # Outline (rounded rectangle)
+        # Outline
         # -------------------------------------------------
-        outline_path = forms.rect(length, width, radius=corner_radius)
-        outline = path.to_lwpolyline(outline_path, close=True)
-        outline.dxf.layer = "OUTLINE"
-        msp.add_entity(outline)
+        draw_rounded_rectangle(
+            msp=msp,
+            x=0,
+            y=0,
+            w=length,
+            h=width,
+            r=corner_radius,
+            layer="OUTLINE"
+        )
 
         # -------------------------------------------------
         # Pattern bounds
@@ -108,7 +140,7 @@ async def generate_dxf(payload: dict = Body(...)):
         row = 0
 
         # -------------------------------------------------
-        # Pattern generation (CRASH-SAFE)
+        # Pattern generation (crash-safe)
         # -------------------------------------------------
         while y < py2:
             offset_x = hole_size / 2 if offset_mode == "half" and row % 2 else 0
@@ -116,7 +148,6 @@ async def generate_dxf(payload: dict = Body(...)):
 
             while x < px2:
 
-                # ---------- SQUARE ----------
                 if pattern == "square":
                     s = hole_size
                     if x + s <= px2 and y + s <= py2:
@@ -124,10 +155,8 @@ async def generate_dxf(payload: dict = Body(...)):
                             [(x,y),(x+s,y),(x+s,y+s),(x,y+s),(x,y)],
                             dxfattribs={"layer":"PATTERN"}
                         )
-                    step_x = s
-                    step_y = s
+                    step_x, step_y = s, s
 
-                # ---------- DIAMOND ----------
                 elif pattern == "diamond":
                     s = hole_size
                     cx, cy = x + s/2, y + s/2
@@ -136,19 +165,15 @@ async def generate_dxf(payload: dict = Body(...)):
                             [(cx,y),(x+s,cy),(cx,y+s),(x,cy),(cx,y)],
                             dxfattribs={"layer":"PATTERN"}
                         )
-                    step_x = s
-                    step_y = s
+                    step_x, step_y = s, s
 
-                # ---------- CIRCLE ----------
                 elif pattern == "circle":
                     d = hole_diameter
                     r = d / 2
                     if x + d <= px2 and y + d <= py2:
                         msp.add_circle((x+r,y+r), r, dxfattribs={"layer":"PATTERN"})
-                    step_x = d
-                    step_y = d
+                    step_x, step_y = d, d
 
-                # ---------- SLOT ----------
                 elif pattern == "slot":
                     hl, hw = slot_length, slot_width
                     r = hw / 2
@@ -156,8 +181,7 @@ async def generate_dxf(payload: dict = Body(...)):
                         msp.add_line((x+r,y+r),(x+hl-r,y+r), dxfattribs={"layer":"PATTERN"})
                         msp.add_arc((x+r,y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
                         msp.add_arc((x+hl-r,y+r), r, -90, 90, dxfattribs={"layer":"PATTERN"})
-                    step_x = hl
-                    step_y = hw
+                    step_x, step_y = hl, hw
 
                 else:
                     break
@@ -168,10 +192,10 @@ async def generate_dxf(payload: dict = Body(...)):
             row += 1
 
         # -------------------------------------------------
-        # AutoCAD viewport
+        # Viewport
         # -------------------------------------------------
         doc.set_modelspace_vport(
-            center=(length/2, width/2),
+            center=(length / 2, width / 2),
             height=width * 1.1
         )
 
