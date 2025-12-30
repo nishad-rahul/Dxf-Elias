@@ -17,7 +17,8 @@ PATTERN_MAP = {
 
 MIN_MARGIN = 15.0
 MAX_MARGIN = 20.0
-TARGET_MARGIN = (MIN_MARGIN + MAX_MARGIN) / 2.0  # 17.5mm mid-target
+TARGET_MARGIN = 17.5
+
 
 def draw_rounded_rectangle(msp, x, y, w, h, r, layer):
     if r <= 0:
@@ -36,47 +37,37 @@ def draw_rounded_rectangle(msp, x, y, w, h, r, layer):
 
 
 def choose_fit(panel_size, hole, pitch):
-    """
-    Returns:
-    - count of holes
-    - starting offset (margin) so that 15–20mm condition is satisfied
-    """
+    best = None
+    best_err = 1e9
 
-    best_choice = None
-    best_error = 1e9
+    max_n = max(1, math.floor((panel_size - hole) / pitch) + 1)
 
-    # iterate feasible counts
-    max_count = max(1, math.floor((panel_size - hole) / pitch) + 1)
-
-    for n in range(1, max_count + 1):
+    for n in range(1, max_n + 1):
         pattern = hole + (n - 1) * pitch
-        margin = (panel_size - pattern) / 2.0
+        margin = (panel_size - pattern) / 2
 
         if margin < MIN_MARGIN:
-            continue  # too tight
+            continue
 
-        # perfect window hit
         if MIN_MARGIN <= margin <= MAX_MARGIN:
             err = abs(margin - TARGET_MARGIN)
-            if err < best_error:
-                best_error = err
-                best_choice = (n, margin)
+            if err < best_err:
+                best_err = err
+                best = (n, margin)
 
-        # store fallback ≥ 15mm if nothing lands ≤ 20mm
-        elif best_choice is None and margin > MAX_MARGIN:
+        elif best is None and margin > MAX_MARGIN:
             err = margin - TARGET_MARGIN
-            if err < best_error:
-                best_error = err
-                best_choice = (n, margin)
+            if err < best_err:
+                best_err = err
+                best = (n, margin)
 
-    # guaranteed at least something
-    if best_choice is None:
-        n = max_count
+    if best is None:
+        n = max_n
         pattern = hole + (n - 1) * pitch
-        margin = max(MIN_MARGIN, (panel_size - pattern) / 2.0)
+        margin = max(MIN_MARGIN, (panel_size - pattern) / 2)
         return n, margin
 
-    return best_choice
+    return best
 
 
 @app.post("/generate_dxf")
@@ -85,36 +76,39 @@ async def generate_dxf(payload: dict = Body(...)):
     if isinstance(payload, list):
         payload = payload[0]
 
-    raw_pattern = payload.get("pattern", "Squares 10x10mm")
-    cfg = PATTERN_MAP[raw_pattern]
+    raw = payload.get("pattern", "Squares 10x10mm")
+    cfg = PATTERN_MAP[raw]
     pattern = cfg["pattern"]
 
-    customer = str(payload.get("customer", "unknown")).replace(" ", "_")
-    length = float(payload.get("length"))
-    width = float(payload.get("width"))
-    corner_radius = float(payload.get("corner_radius", 0))
-
+    customer = str(payload.get("customer","unknown")).replace(" ","_")
+    length = float(payload["length"])
+    width  = float(payload["width"])
+    corner = float(payload.get("corner_radius",0))
     spacing = cfg["spacing"]
     offset_mode = cfg["offset"]
 
-    # hole definitions
-    if pattern in ("square", "diamond"):
+    if pattern in ("square","diamond"):
         hole_w = hole_h = cfg["hole_size"]
-        pitch_x = pitch_y = cfg["hole_size"] + spacing
-
+        pitch_x = pitch_y = hole_w + spacing
     elif pattern == "circle":
         hole_w = hole_h = cfg["hole_diameter"]
-        pitch_x = pitch_y = cfg["hole_diameter"] + spacing
-
-    elif pattern == "slot":
+        pitch_x = pitch_y = hole_w + spacing
+    else:
         hole_w = cfg["slot_length"]
         hole_h = cfg["slot_width"]
-        pitch_x = cfg["slot_length"] + spacing
-        pitch_y = cfg["slot_width"] + spacing
+        pitch_x = hole_w + spacing
+        pitch_y = hole_h + spacing
 
-    # ---------- enforce 15–20mm margins ----------
     cols, margin_x = choose_fit(length, hole_w, pitch_x)
     rows, margin_y = choose_fit(width,  hole_h, pitch_y)
+
+    # ---------- KEY FIX: account for half-offset ----------
+    half_shift = 0.0
+    if offset_mode == "half" and rows > 1:
+        half_shift = (pitch_y - hole_h) / 2.0
+
+    pattern_h = hole_h + (rows - 1) * pitch_y + half_shift
+    margin_y = (width - pattern_h) / 2.0
 
     x_start = margin_x
     y_start = margin_y
@@ -129,65 +123,47 @@ async def generate_dxf(payload: dict = Body(...)):
     doc.layers.new(name="OUTLINE")
     doc.layers.new(name="PATTERN")
 
-    draw_rounded_rectangle(msp, 0, 0, length, width, corner_radius, "OUTLINE")
+    draw_rounded_rectangle(msp,0,0,length,width,corner,"OUTLINE")
 
-    # -------- pattern generation ----------
     y = y_start
-    row = 0
+    for r in range(rows):
 
-    while row < rows:
+        ox = 0
+        if offset_mode == "half" and r % 2:
+            ox = (pitch_x - hole_w) / 2.0
 
-        offset_x = 0
-        if offset_mode == "half" and row % 2:
-            offset_x = (pitch_x - hole_w) / 2.0
+        x = x_start + ox
 
-        x = x_start + offset_x
-        col = 0
-
-        while col < cols:
+        for c in range(cols):
 
             if pattern == "square":
                 s = hole_w
-                msp.add_lwpolyline(
-                    [(x,y),(x+s,y),(x+s,y+s),(x,y+s),(x,y)],
-                    dxfattribs={"layer":"PATTERN"}
-                )
+                msp.add_lwpolyline([(x,y),(x+s,y),(x+s,y+s),(x,y+s),(x,y)],dxfattribs={"layer":"PATTERN"})
 
             elif pattern == "diamond":
                 s = hole_w
                 cx, cy = x + s/2, y + s/2
-                msp.add_lwpolyline(
-                    [(cx,y),(x+s,cy),(cx,y+s),(x,cy),(cx,y)],
-                    dxfattribs={"layer":"PATTERN"}
-                )
+                msp.add_lwpolyline([(cx,y),(x+s,cy),(cx,y+s),(x,cy),(cx,y)],dxfattribs={"layer":"PATTERN"})
 
             elif pattern == "circle":
-                r = hole_w/2
-                msp.add_circle((x+r,y+r), r, dxfattribs={"layer":"PATTERN"})
+                r0 = hole_w/2
+                msp.add_circle((x+r0,y+r0),r0,dxfattribs={"layer":"PATTERN"})
 
-            elif pattern == "slot":
+            else:
                 hl, hw = hole_w, hole_h
-                r = hw/2
-                msp.add_line((x+r,y+r),(x+hl-r,y+r), dxfattribs={"layer":"PATTERN"})
-                msp.add_arc((x+r,y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
-                msp.add_arc((x+hl-r,y+r), r, -90, 90, dxfattribs={"layer":"PATTERN"})
+                r0 = hw/2
+                msp.add_line((x+r0,y+r0),(x+hl-r0,y+r0),dxfattribs={"layer":"PATTERN"})
+                msp.add_arc((x+r0,y+r0),r0,90,270,dxfattribs={"layer":"PATTERN"})
+                msp.add_arc((x+hl-r0,y+r0),r0,-90,90,dxfattribs={"layer":"PATTERN"})
 
             x += pitch_x
-            col += 1
 
         y += pitch_y
-        row += 1
 
-    doc.set_modelspace_vport(center=(length/2, width/2), height=width*1.1)
+    doc.set_modelspace_vport(center=(length/2,width/2),height=width*1.1)
     doc.saveas(filename)
 
-    with open(filename, "rb") as f:
-        encoded = base64.b64encode(f.read()).decode()
+    with open(filename,"rb") as f:
+        data = base64.b64encode(f.read()).decode()
 
-    return {
-        "status": "ok",
-        "file_name": os.path.basename(filename),
-        "file_base64": encoded,
-        "margin_x_mm": round(margin_x, 2),
-        "margin_y_mm": round(margin_y, 2),
-    }
+    return {"status":"ok","file_name":filename,"file_base64":data}
