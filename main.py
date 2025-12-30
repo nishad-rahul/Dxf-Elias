@@ -7,7 +7,7 @@ import math
 app = FastAPI()
 
 # =========================================================
-# Pattern Configuration (Matches Variant A Documentation)
+# Pattern Configuration
 # =========================================================
 PATTERN_MAP = {
     "Squares 10x10mm": {
@@ -18,9 +18,9 @@ PATTERN_MAP = {
     },
     "Check 10x10mm": {
         "pattern": "diamond",
-        "hole_size": 10,
+        "hole_size": 10, # Standard "Side Length"
         "spacing": 10,
-        "offset": "half",
+        "offset": "none", # 'None' matches your straight-grid goal image
     },
     "Round hole 10mm": {
         "pattern": "circle",
@@ -48,56 +48,49 @@ def draw_rounded_rectangle(msp, x, y, w, h, r, layer):
         )
         return
     
-    # Draw straight lines
     msp.add_line((x+r, y), (x+w-r, y), dxfattribs={"layer": layer})
     msp.add_line((x+w, y+r), (x+w, y+h-r), dxfattribs={"layer": layer})
     msp.add_line((x+w-r, y+h), (x+r, y+h), dxfattribs={"layer": layer})
     msp.add_line((x, y+h-r), (x, y+r), dxfattribs={"layer": layer})
     
-    # Draw corner arcs
     msp.add_arc((x+w-r, y+r), r, 270, 360, dxfattribs={"layer": layer})
     msp.add_arc((x+w-r, y+h-r), r, 0, 90, dxfattribs={"layer": layer})
     msp.add_arc((x+r, y+h-r), r, 90, 180, dxfattribs={"layer": layer})
     msp.add_arc((x+r, y+r), r, 180, 270, dxfattribs={"layer": layer})
 
 # =========================================================
-# CORE LOGIC: Dynamic Spacing Calculation
+# Layout Logic: Dynamic Pitch + Strict Margins
 # =========================================================
-def calculate_perfect_fit(sheet_size, hole_size, min_spacing):
+def calculate_centered_layout(sheet_size, hole_bounding_size, spacing):
     """
-    Ensures margin is strictly >= 17mm and symmetrical.
+    Calculates count and pitch to ensure margins are >= 17mm
+    and the pattern is perfectly centered.
     """
-    # ⚠️ UPDATED: Strictly enforces >= 17mm per Variant A docs
     TARGET_MIN_MARGIN = 17.0 
     
-    # 1. Determine usable space inside the margins
-    # We strip 17mm from top and bottom (total 34mm)
+    # 1. Available space for pattern
     usable_space = sheet_size - (2 * TARGET_MIN_MARGIN)
     
-    # 2. Minimum pitch (hole + min gap)
-    min_pitch = hole_size + min_spacing
+    # 2. Pitch = Bounding Box + Spacing
+    pitch = hole_bounding_size + spacing
     
-    # 3. How many holes fit?
-    if usable_space < hole_size:
-        # If the sheet is too small, return 0 holes and center the emptiness
+    # 3. How many fit?
+    if usable_space < hole_bounding_size:
         return 0, 0, sheet_size / 2
 
-    # Math.floor ensures we never exceed the usable space.
-    # This guarantees the remaining space (margin) is >= 17mm.
-    count = math.floor((usable_space - hole_size) / min_pitch) + 1
+    # Logic: (Count * Size) + ((Count-1) * Spacing) <= Usable
+    count = math.floor((usable_space + spacing) / pitch)
     
-    if count <= 1:
-        return 1, 0, (sheet_size - hole_size) / 2
+    if count <= 0:
+        return 0, 0, sheet_size/2
 
-    # 4. Stretch the pitch to fill the space evenly
-    # This ensures the "leftover" margin is distributed exactly evenly
-    ideal_pitch = (usable_space - hole_size) / (count - 1)
+    # 4. Calculate actual total width of the pattern block
+    actual_pattern_width = (count * hole_bounding_size) + ((count - 1) * spacing)
+
+    # 5. Center it (Calculate Margin)
+    margin = (sheet_size - actual_pattern_width) / 2
     
-    # 5. Calculate final exact margin
-    final_pattern_size = hole_size + (count - 1) * ideal_pitch
-    margin = (sheet_size - final_pattern_size) / 2
-    
-    return count, ideal_pitch, margin
+    return count, pitch, margin
 
 # =========================================================
 # DXF Generator Endpoint
@@ -114,24 +107,31 @@ async def generate_dxf(payload: dict = Body(...)):
     customer = str(payload.get("customer", "Variant_A")).replace(" ", "_")
     length = float(payload.get("length", 500))
     width = float(payload.get("width", 300))
-    
-    # ⚠️ UPDATED: Default is now 5mm per documentation
-    corner_radius = float(payload.get("corner_radius", 5)) 
+    corner_radius = float(payload.get("corner_radius", 5))
 
-    min_spacing = cfg["spacing"]
+    spacing = cfg["spacing"]
     offset_mode = cfg["offset"]
 
     # ============================
-    # 1. Determine Hole Size
+    # 1. Determine Hole Bounding Box
     # ============================
-    hole_w, hole_h = 10, 10 # Fallback
+    hole_w, hole_h = 10, 10 
 
-    if pattern in ("square", "diamond"):
+    if pattern == "square":
         s = cfg.get("hole_size", 10)
         hole_w, hole_h = s, s
+        
+    elif pattern == "diamond":
+        s = cfg.get("hole_size", 10)
+        # ⚠️ FIX: A 10mm square rotated 45 deg has a diagonal of 10 * sqrt(2)
+        # This makes the bounding box ~14.14mm, but the side remains 10mm.
+        diagonal = s * math.sqrt(2)
+        hole_w, hole_h = diagonal, diagonal
+        
     elif pattern == "circle":
         d = cfg.get("hole_diameter", 10)
         hole_w, hole_h = d, d
+        
     elif pattern == "slot":
         hole_w = cfg.get("slot_length", 35)
         hole_h = cfg.get("slot_width", 10)
@@ -139,8 +139,8 @@ async def generate_dxf(payload: dict = Body(...)):
     # ============================
     # 2. Calculate Layout
     # ============================
-    cols, pitch_x, margin_x = calculate_perfect_fit(length, hole_w, min_spacing)
-    rows, pitch_y, margin_y = calculate_perfect_fit(width, hole_h, min_spacing)
+    cols, pitch_x, margin_x = calculate_centered_layout(length, hole_w, spacing)
+    rows, pitch_y, margin_y = calculate_centered_layout(width, hole_h, spacing)
 
     # ============================
     # 3. Setup DXF
@@ -152,7 +152,7 @@ async def generate_dxf(payload: dict = Body(...)):
     doc.layers.new(name="OUTLINE")
     doc.layers.new(name="PATTERN")
 
-    # Draw Outline (Size is exact length x width)
+    # Draw Outline
     draw_rounded_rectangle(msp, 0, 0, length, width, corner_radius, "OUTLINE")
 
     # ============================
@@ -171,7 +171,7 @@ async def generate_dxf(payload: dict = Body(...)):
         col = 0
 
         while col < cols:
-            # Check bounds (right edge)
+            # Boundary Check
             if x + hole_w > length - 10: 
                 col += 1
                 continue
@@ -183,9 +183,13 @@ async def generate_dxf(payload: dict = Body(...)):
                     dxfattribs={"layer":"PATTERN"}
                 )
             elif pattern == "diamond":
+                # Draw Diamond using Bounding Box
+                # Midpoints of the bounding box sides form the diamond
                 cx, cy = x + hole_w/2, y + hole_h/2
+                
+                # Top, Right, Bottom, Left (Clockwise)
                 msp.add_lwpolyline(
-                    [(cx,y), (x+hole_w,cy), (cx,y+hole_h), (x,cy), (cx,y)],
+                    [(cx, y), (x+hole_w, cy), (cx, y+hole_h), (x, cy), (cx, y)],
                     dxfattribs={"layer":"PATTERN"}
                 )
             elif pattern == "circle":
@@ -211,9 +215,9 @@ async def generate_dxf(payload: dict = Body(...)):
         "status": "ok",
         "file_name": os.path.basename(filename),
         "file_base64": encoded,
-        "margins": {
-            "x": round(margin_x, 2), 
-            "y": round(margin_y, 2),
-            "note": "Margins guaranteed >= 17mm"
+        "debug": {
+            "hole_bounding_box_mm": round(hole_w, 2),
+            "margin_x": round(margin_x, 2),
+            "note": "Diamond size calculated as 10mm SIDE (14.14mm Diagonal)"
         }
     }
