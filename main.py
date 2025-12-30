@@ -7,13 +7,13 @@ import math
 app = FastAPI()
 
 # =========================================================
-# Pattern Configuration
+# Pattern Configuration (Matches Variant A Documentation)
 # =========================================================
 PATTERN_MAP = {
     "Squares 10x10mm": {
         "pattern": "square",
         "hole_size": 10,
-        "spacing": 10, # Minimum spacing preference
+        "spacing": 10, 
         "offset": "half",
     },
     "Check 10x10mm": {
@@ -47,53 +47,53 @@ def draw_rounded_rectangle(msp, x, y, w, h, r, layer):
             dxfattribs={"layer": layer}
         )
         return
-    # Draw lines and arcs for rounded corners
+    
+    # Draw straight lines
     msp.add_line((x+r, y), (x+w-r, y), dxfattribs={"layer": layer})
     msp.add_line((x+w, y+r), (x+w, y+h-r), dxfattribs={"layer": layer})
     msp.add_line((x+w-r, y+h), (x+r, y+h), dxfattribs={"layer": layer})
     msp.add_line((x, y+h-r), (x, y+r), dxfattribs={"layer": layer})
+    
+    # Draw corner arcs
     msp.add_arc((x+w-r, y+r), r, 270, 360, dxfattribs={"layer": layer})
     msp.add_arc((x+w-r, y+h-r), r, 0, 90, dxfattribs={"layer": layer})
     msp.add_arc((x+r, y+h-r), r, 90, 180, dxfattribs={"layer": layer})
     msp.add_arc((x+r, y+r), r, 180, 270, dxfattribs={"layer": layer})
 
 # =========================================================
-# 🆕 CORE LOGIC: Dynamic Spacing Calculation
+# CORE LOGIC: Dynamic Spacing Calculation
 # =========================================================
 def calculate_perfect_fit(sheet_size, hole_size, min_spacing):
     """
-    Returns (count, pitch, margin) such that the margin is
-    closest to 17.5mm (between 15 and 20).
+    Ensures margin is strictly >= 17mm and symmetrical.
     """
-    TARGET_MARGIN = 17.5  # The sweet spot
+    # ⚠️ UPDATED: Strictly enforces >= 17mm per Variant A docs
+    TARGET_MIN_MARGIN = 17.0 
     
-    # 1. Available space if we strictly enforced the target margin
-    usable_space = sheet_size - (2 * TARGET_MARGIN)
+    # 1. Determine usable space inside the margins
+    # We strip 17mm from top and bottom (total 34mm)
+    usable_space = sheet_size - (2 * TARGET_MIN_MARGIN)
     
     # 2. Minimum pitch (hole + min gap)
     min_pitch = hole_size + min_spacing
     
-    # 3. How many holes fit in that usable space?
-    # formula: count * hole + (count-1) * gap <= usable_space
-    # simplified: (count-1)*pitch + hole <= usable_space
+    # 3. How many holes fit?
     if usable_space < hole_size:
+        # If the sheet is too small, return 0 holes and center the emptiness
         return 0, 0, sheet_size / 2
 
-    # Calculate max columns/rows that fit the target area
+    # Math.floor ensures we never exceed the usable space.
+    # This guarantees the remaining space (margin) is >= 17mm.
     count = math.floor((usable_space - hole_size) / min_pitch) + 1
     
     if count <= 1:
-        # If only 1 fits, center it
         return 1, 0, (sheet_size - hole_size) / 2
 
-    # 4. Calculate the 'Perfect Pitch'
-    # We stretch the spacing so the total pattern width exactly equals 'usable_space'
-    # Pattern Width = hole_size + (count - 1) * pitch
-    # So: pitch = (Pattern Width - hole_size) / (count - 1)
-    
+    # 4. Stretch the pitch to fill the space evenly
+    # This ensures the "leftover" margin is distributed exactly evenly
     ideal_pitch = (usable_space - hole_size) / (count - 1)
     
-    # 5. Verify the margin (Should be exactly 17.5 now)
+    # 5. Calculate final exact margin
     final_pattern_size = hole_size + (count - 1) * ideal_pitch
     margin = (sheet_size - final_pattern_size) / 2
     
@@ -111,10 +111,12 @@ async def generate_dxf(payload: dict = Body(...)):
     cfg = PATTERN_MAP.get(raw_pattern, PATTERN_MAP["Squares 10x10mm"])
     pattern = cfg["pattern"]
 
-    customer = str(payload.get("customer", "unknown")).replace(" ", "_")
+    customer = str(payload.get("customer", "Variant_A")).replace(" ", "_")
     length = float(payload.get("length", 500))
     width = float(payload.get("width", 300))
-    corner_radius = float(payload.get("corner_radius", 0))
+    
+    # ⚠️ UPDATED: Default is now 5mm per documentation
+    corner_radius = float(payload.get("corner_radius", 5)) 
 
     min_spacing = cfg["spacing"]
     offset_mode = cfg["offset"]
@@ -122,7 +124,7 @@ async def generate_dxf(payload: dict = Body(...)):
     # ============================
     # 1. Determine Hole Size
     # ============================
-    hole_w, hole_h = 10, 10 # Defaults
+    hole_w, hole_h = 10, 10 # Fallback
 
     if pattern in ("square", "diamond"):
         s = cfg.get("hole_size", 10)
@@ -135,13 +137,13 @@ async def generate_dxf(payload: dict = Body(...)):
         hole_h = cfg.get("slot_width", 10)
 
     # ============================
-    # 2. Calculate Layout (X and Y axes)
+    # 2. Calculate Layout
     # ============================
     cols, pitch_x, margin_x = calculate_perfect_fit(length, hole_w, min_spacing)
     rows, pitch_y, margin_y = calculate_perfect_fit(width, hole_h, min_spacing)
 
     # ============================
-    # 3. Initialize DXF
+    # 3. Setup DXF
     # ============================
     os.makedirs("output_dxf", exist_ok=True)
     filename = f"output_dxf/{customer}_{pattern}.dxf"
@@ -150,17 +152,17 @@ async def generate_dxf(payload: dict = Body(...)):
     doc.layers.new(name="OUTLINE")
     doc.layers.new(name="PATTERN")
 
-    # Draw Outline
+    # Draw Outline (Size is exact length x width)
     draw_rounded_rectangle(msp, 0, 0, length, width, corner_radius, "OUTLINE")
 
     # ============================
-    # 4. Generate Pattern
+    # 4. Draw Pattern
     # ============================
     y = margin_y
     row = 0
 
     while row < rows:
-        # Handle Stagger/Offset
+        # Offset Logic
         current_offset = 0
         if offset_mode == "half" and row % 2 != 0:
             current_offset = pitch_x / 2
@@ -168,35 +170,27 @@ async def generate_dxf(payload: dict = Body(...)):
         x = margin_x + current_offset
         col = 0
 
-        # We iterate through calculated columns. 
-        # Note: If offset pushes the last item over the edge, we skip it.
         while col < cols:
-            
-            # Boundary Check: Does this specific hole go out of bounds?
-            # We check the right edge of the hole against the sheet edge minus safe margin
-            if x + hole_w > length - 10: # Safety buffer
+            # Check bounds (right edge)
+            if x + hole_w > length - 10: 
                 col += 1
                 continue
 
-            # DRAWING LOGIC
+            # Draw shapes
             if pattern == "square":
                 msp.add_lwpolyline(
                     [(x,y), (x+hole_w,y), (x+hole_w,y+hole_h), (x,y+hole_h), (x,y)],
                     dxfattribs={"layer":"PATTERN"}
                 )
-            
             elif pattern == "diamond":
-                # Diamond inscribed in the hole_size box
                 cx, cy = x + hole_w/2, y + hole_h/2
                 msp.add_lwpolyline(
                     [(cx,y), (x+hole_w,cy), (cx,y+hole_h), (x,cy), (cx,y)],
                     dxfattribs={"layer":"PATTERN"}
                 )
-
             elif pattern == "circle":
                 r = hole_w / 2
                 msp.add_circle((x+r, y+r), r, dxfattribs={"layer":"PATTERN"})
-
             elif pattern == "slot":
                 r = hole_h / 2
                 msp.add_line((x+r,y+r), (x+hole_w-r,y+r), dxfattribs={"layer":"PATTERN"})
@@ -209,7 +203,6 @@ async def generate_dxf(payload: dict = Body(...)):
         y += pitch_y
         row += 1
 
-    # Save
     doc.saveas(filename)
     with open(filename, "rb") as f:
         encoded = base64.b64encode(f.read()).decode()
@@ -218,6 +211,9 @@ async def generate_dxf(payload: dict = Body(...)):
         "status": "ok",
         "file_name": os.path.basename(filename),
         "file_base64": encoded,
-        "margins": {"x": margin_x, "y": margin_y}, # Returns the calculated margin for verification
-        "pitch": {"x": pitch_x, "y": pitch_y}
+        "margins": {
+            "x": round(margin_x, 2), 
+            "y": round(margin_y, 2),
+            "note": "Margins guaranteed >= 17mm"
+        }
     }
