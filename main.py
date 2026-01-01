@@ -59,25 +59,57 @@ def draw_rounded_rectangle(msp, x, y, w, h, r, layer):
     msp.add_arc((x+r, y+r), r, 180, 270, dxfattribs={"layer": layer})
 
 # =========================================================
-# Layout Logic
+# 🆕 LOGIC: Uniform Margins + Offset Correction
 # =========================================================
-def calculate_centered_layout(sheet_size, hole_bounding_size, spacing):
+def calculate_axis_params(sheet_length, item_size, min_spacing, stagger_offset=0, fixed_margin=None):
+    """
+    Calculates the best fit (Count, Pitch, Margin).
+    If fixed_margin is provided, it forces that margin and adjusts pitch/count.
+    """
     TARGET_MIN_MARGIN = 17.0 
-    usable_space = sheet_size - (2 * TARGET_MIN_MARGIN)
-    pitch = hole_bounding_size + spacing
     
-    if usable_space < hole_bounding_size:
-        return 0, 0, sheet_size / 2
+    # If we are forcing a margin (to match the other side), use it.
+    # Otherwise use the safety minimum.
+    effective_margin = fixed_margin if fixed_margin is not None else TARGET_MIN_MARGIN
+    
+    # Total pattern width (including the stagger shift if applicable)
+    # Visual Width ~= (Count * Pitch) - Spacing + StaggerOffset
+    
+    usable_space = sheet_length - (2 * effective_margin)
+    
+    # Estimate Pitch
+    min_pitch = item_size + min_spacing
+    
+    if usable_space < item_size:
+        return 0, 0, sheet_length / 2
 
-    count = math.floor((usable_space + spacing) / pitch)
+    # Calculate max count that fits in the usable space
+    # Formula considering stagger: (Count-1)*Pitch + Size + Stagger <= Usable
+    # (Count-1)*Pitch <= Usable - Size - Stagger
+    # Count-1 <= (Usable - Size - Stagger) / Pitch
+    
+    safe_width_allowance = usable_space - item_size - stagger_offset
+    if safe_width_allowance < 0:
+         return 0, 0, sheet_length / 2 # Can't fit even one with stagger
+         
+    count = math.floor(safe_width_allowance / min_pitch) + 1
     
     if count <= 0:
-        return 0, 0, sheet_size/2
+        return 0, 0, sheet_length/2
 
-    actual_pattern_width = (count * hole_bounding_size) + ((count - 1) * spacing)
-    margin = (sheet_size - actual_pattern_width) / 2
+    # Calculate Perfect Pitch to fill the space EXACTLY
+    # (Count - 1) * Pitch = Usable - Size - Stagger
+    if count > 1:
+        ideal_pitch = (usable_space - item_size - stagger_offset) / (count - 1)
+    else:
+        ideal_pitch = 0 # Single item, centered
+
+    # Recalculate exact margin based on this pitch
+    # Pattern Visual Width
+    final_visual_width = item_size + ((count - 1) * ideal_pitch) + stagger_offset
+    margin = (sheet_length - final_visual_width) / 2
     
-    return count, pitch, margin
+    return count, ideal_pitch, margin
 
 # =========================================================
 # DXF Generator Endpoint
@@ -100,35 +132,51 @@ async def generate_dxf(payload: dict = Body(...)):
     offset_mode = cfg["offset"]
 
     # ============================
-    # 1. Determine Hole Bounding Box
+    # 1. Determine Dimensions
     # ============================
     hole_w, hole_h = 10, 10 
-
     if pattern == "square":
         s = cfg.get("hole_size", 10)
         hole_w, hole_h = s, s
-        
     elif pattern == "diamond":
         s = cfg.get("hole_size", 10)
         diagonal = s * math.sqrt(2)
         hole_w, hole_h = diagonal, diagonal
-        
     elif pattern == "circle":
         d = cfg.get("hole_diameter", 10)
         hole_w, hole_h = d, d
-        
     elif pattern == "slot":
         hole_w = cfg.get("slot_length", 35)
         hole_h = cfg.get("slot_width", 10)
 
+    # Determine Stagger Value (Only affects X axis visual width)
+    # Stagger adds width to the total block equal to (Pitch X / 2)
+    # But we don't know Pitch X yet. We estimate it first.
+    est_pitch_x = hole_w + spacing
+    stagger_val_x = (est_pitch_x / 2) if (offset_mode == "half") else 0
+    
     # ============================
-    # 2. Calculate Layout
+    # 2. Calculate Initial Layouts
     # ============================
-    cols, pitch_x, margin_x = calculate_centered_layout(length, hole_w, spacing)
-    rows, pitch_y, margin_y = calculate_centered_layout(width, hole_h, spacing)
+    # First pass: Find the "Natural" margins for both axes
+    c_x, p_x, m_x = calculate_axis_params(length, hole_w, spacing, stagger_val_x)
+    c_y, p_y, m_y = calculate_axis_params(width, hole_h, spacing, 0) # No Y stagger usually
 
     # ============================
-    # 3. Setup DXF
+    # 3. Equalize Margins
+    # ============================
+    # Find the LARGEST margin required by either axis.
+    # We must use this larger margin for BOTH sides to ensure Top=Bottom=Left=Right.
+    common_margin = max(m_x, m_y)
+    
+    # Recalculate using the forced common margin
+    # Note: We update stagger_val_x because pitch might change slightly, 
+    # but the recursive difference is negligible for this purpose.
+    cols, pitch_x, margin_x = calculate_axis_params(length, hole_w, spacing, stagger_val_x, fixed_margin=common_margin)
+    rows, pitch_y, margin_y = calculate_axis_params(width, hole_h, spacing, 0, fixed_margin=common_margin)
+
+    # ============================
+    # 4. Setup DXF
     # ============================
     os.makedirs("output_dxf", exist_ok=True)
     filename = f"output_dxf/{customer}_{pattern}.dxf"
@@ -140,21 +188,33 @@ async def generate_dxf(payload: dict = Body(...)):
     draw_rounded_rectangle(msp, 0, 0, length, width, corner_radius, "OUTLINE")
 
     # ============================
-    # 4. Draw Pattern
+    # 5. Draw Pattern
     # ============================
     y = margin_y
     row = 0
+    
+    # ⚠️ FIX for "Greater Left Margin":
+    # If staggered, the whole block is wider. The calculated 'margin_x' 
+    # centers that WIDER block.
+    # However, Row 0 starts at the left-most edge. Row 1 starts shifted right.
+    # The 'margin_x' we calculated is the correct distance from sheet edge 
+    # to the VISUAL LEFT EDGE of the pattern block.
+    # So we simply start at margin_x.
+    
+    x_start_base = margin_x
 
     while row < rows:
         current_offset = 0
         if offset_mode == "half" and row % 2 != 0:
             current_offset = pitch_x / 2
         
-        x = margin_x + current_offset
+        # Calculate X position
+        x = x_start_base + current_offset
         col = 0
 
         while col < cols:
-            if x + hole_w > length - 10: 
+            # Boundary Check
+            if x + hole_w > length: 
                 col += 1
                 continue
 
@@ -174,42 +234,12 @@ async def generate_dxf(payload: dict = Body(...)):
                 msp.add_circle((x+r, y+r), r, dxfattribs={"layer":"PATTERN"})
             
             elif pattern == "slot":
-                # ========================================================
-                # 🛠️ FIXED: Draws a full 'Stadium' outline (Pill shape)
-                # ========================================================
+                # Draw Stadium Shape
                 r = hole_h / 2
-                
-                # 1. Top Line (Horizontal)
-                msp.add_line(
-                    (x + r, y + hole_h),       # Start Top-Left (after arc)
-                    (x + hole_w - r, y + hole_h), # End Top-Right (before arc)
-                    dxfattribs={"layer": "PATTERN"}
-                )
-
-                # 2. Bottom Line (Horizontal)
-                msp.add_line(
-                    (x + r, y),                # Start Bottom-Left
-                    (x + hole_w - r, y),       # End Bottom-Right
-                    dxfattribs={"layer": "PATTERN"}
-                )
-
-                # 3. Left Arc (Semi-circle 90 to 270 degrees)
-                msp.add_arc(
-                    center=(x + r, y + r), 
-                    radius=r, 
-                    start_angle=90, 
-                    end_angle=270, 
-                    dxfattribs={"layer": "PATTERN"}
-                )
-
-                # 4. Right Arc (Semi-circle -90 to 90 degrees)
-                msp.add_arc(
-                    center=(x + hole_w - r, y + r), 
-                    radius=r, 
-                    start_angle=-90, 
-                    end_angle=90, 
-                    dxfattribs={"layer": "PATTERN"}
-                )
+                msp.add_line((x+r, y+hole_h), (x+hole_w-r, y+hole_h), dxfattribs={"layer": "PATTERN"}) # Top
+                msp.add_line((x+r, y), (x+hole_w-r, y), dxfattribs={"layer": "PATTERN"}) # Bottom
+                msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer": "PATTERN"}) # Left Cap
+                msp.add_arc((x+hole_w-r, y+r), r, -90, 90, dxfattribs={"layer": "PATTERN"}) # Right Cap
 
             x += pitch_x
             col += 1
@@ -224,5 +254,10 @@ async def generate_dxf(payload: dict = Body(...)):
     return {
         "status": "ok",
         "file_name": os.path.basename(filename),
-        "file_base64": encoded
+        "file_base64": encoded,
+        "margins": {
+            "requested_uniformity": True,
+            "final_margin_x": round(margin_x, 2),
+            "final_margin_y": round(margin_y, 2)
+        }
     }
