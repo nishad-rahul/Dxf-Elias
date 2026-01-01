@@ -18,9 +18,9 @@ PATTERN_MAP = {
     },
     "Check 10x10mm": {
         "pattern": "diamond",
-        "hole_size": 10, # Standard "Side Length"
+        "hole_size": 10, 
         "spacing": 10,
-        "offset": "none", # 'None' matches your straight-grid goal image
+        "offset": "none", # Kept as straight grid per previous request
     },
     "Round hole 10mm": {
         "pattern": "circle",
@@ -33,7 +33,9 @@ PATTERN_MAP = {
         "slot_length": 35,
         "slot_width": 10,
         "spacing": 10,
-        "offset": "half",
+        # ⚠️ CRITICAL FIX: "half" creates the staggered (brick) pattern
+        # seen in your second image. "none" would create the grid.
+        "offset": "half", 
     },
 }
 
@@ -123,8 +125,7 @@ async def generate_dxf(payload: dict = Body(...)):
         
     elif pattern == "diamond":
         s = cfg.get("hole_size", 10)
-        # ⚠️ FIX: A 10mm square rotated 45 deg has a diagonal of 10 * sqrt(2)
-        # This makes the bounding box ~14.14mm, but the side remains 10mm.
+        # Diamond bounding box calculation
         diagonal = s * math.sqrt(2)
         hole_w, hole_h = diagonal, diagonal
         
@@ -163,6 +164,7 @@ async def generate_dxf(payload: dict = Body(...)):
 
     while row < rows:
         # Offset Logic
+        # This creates the "Brick" pattern for the Slotted Holes
         current_offset = 0
         if offset_mode == "half" and row % 2 != 0:
             current_offset = pitch_x / 2
@@ -171,7 +173,7 @@ async def generate_dxf(payload: dict = Body(...)):
         col = 0
 
         while col < cols:
-            # Boundary Check
+            # Boundary Check: Ensure staggering doesn't push shapes out of bounds
             if x + hole_w > length - 10: 
                 col += 1
                 continue
@@ -183,11 +185,8 @@ async def generate_dxf(payload: dict = Body(...)):
                     dxfattribs={"layer":"PATTERN"}
                 )
             elif pattern == "diamond":
-                # Draw Diamond using Bounding Box
-                # Midpoints of the bounding box sides form the diamond
+                # Diamond inscribed in bounding box
                 cx, cy = x + hole_w/2, y + hole_h/2
-                
-                # Top, Right, Bottom, Left (Clockwise)
                 msp.add_lwpolyline(
                     [(cx, y), (x+hole_w, cy), (cx, y+hole_h), (x, cy), (cx, y)],
                     dxfattribs={"layer":"PATTERN"}
@@ -197,6 +196,7 @@ async def generate_dxf(payload: dict = Body(...)):
                 msp.add_circle((x+r, y+r), r, dxfattribs={"layer":"PATTERN"})
             elif pattern == "slot":
                 r = hole_h / 2
+                # Draw Slot: Line + 2 Arcs
                 msp.add_line((x+r,y+r), (x+hole_w-r,y+r), dxfattribs={"layer":"PATTERN"})
                 msp.add_arc((x+r,y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
                 msp.add_arc((x+hole_w-r,y+r), r, -90, 90, dxfattribs={"layer":"PATTERN"})
@@ -216,8 +216,9 @@ async def generate_dxf(payload: dict = Body(...)):
         "file_name": os.path.basename(filename),
         "file_base64": encoded,
         "debug": {
-            "hole_bounding_box_mm": round(hole_w, 2),
-            "margin_x": round(margin_x, 2),
-            "note": "Diamond size calculated as 10mm SIDE (14.14mm Diagonal)"
+            "hole_type": pattern,
+            "hole_w": round(hole_w, 2),
+            "offset_applied": offset_mode,
+            "margin_x": round(margin_x, 2)
         }
     }
