@@ -16,10 +16,22 @@ PATTERN_MAP = {
         "spacing": 10, 
         "offset": "half",
     },
+    # 🆕 NEW Q+ PATTERN LOGIC
+    "Squares Grouped": {
+        "pattern": "square",
+        "hole_size": 10,
+        "spacing": 10,
+        "offset": "half",
+        # Grouping Logic: Draw for 110mm (approx 6 cols), then skip 70mm
+        "grouping": {
+            "fill_width": 110.0, 
+            "gap_width": 70.0
+        }
+    },
     "Check 10x10mm": {
         "pattern": "diamond",
         "hole_size": 10, 
-        "spacing": 5.1,    # 🆕 UPDATED: Exact 5.1mm bridge gap
+        "spacing": 5.1,    # Bridge gap 5.1mm
         "offset": "half",  # Staggered
     },
     "Round hole 10mm": {
@@ -59,59 +71,31 @@ def draw_rounded_rectangle(msp, x, y, w, h, r, layer):
     msp.add_arc((x+r, y+r), r, 180, 270, dxfattribs={"layer": layer})
 
 # =========================================================
-# Layout Logic: Uniform Margins + Dense Diamond Packing
+# Layout Logic
 # =========================================================
 def calculate_layout_params(sheet_length, sheet_width, item_size, target_gap, pattern_type):
-    """
-    Calculates unified layout parameters for both axes to ensure symmetry.
-    Special logic for 'diamond' to ensure dense packing and correct bridge width.
-    """
     TARGET_MIN_MARGIN = 17.0 
     
-    # ---------------------------------------------------------
-    # 1. Calculate PITCH (Center-to-Center Distance)
-    # ---------------------------------------------------------
+    # 1. Calculate Pitch
     if pattern_type == "diamond":
-        # GEOMETRY FIX: For a diamond mesh with a specific "Bridge Width" (gap),
-        # the Pitch is the diagonal of the (Size + Gap) square.
-        # Pitch = (Side + Gap) * sqrt(2)
         pitch_x = (item_size + target_gap) * math.sqrt(2)
-        
-        # PACKING FIX: To make it "impact packed", rows must nest.
-        # Vertical pitch should be exactly half of horizontal pitch in a standard diamond mesh.
         pitch_y = pitch_x / 2
-        
-        # Stagger X offset is half the pitch
         stagger_x = pitch_x / 2
-        
-        # Bounding Box for calculation (Tip-to-Tip size)
         bounding_size = item_size * math.sqrt(2)
-        
     else:
-        # Standard logic for Square/Circle/Slot
         pitch_x = item_size + target_gap
-        pitch_y = item_size + target_gap # Usually square grid base
-        
-        stagger_x = (pitch_x / 2) # Standard stagger
-        bounding_size = item_size # Simple bounding box
+        pitch_y = item_size + target_gap 
+        stagger_x = (pitch_x / 2)
+        bounding_size = item_size
 
-    # ---------------------------------------------------------
-    # 2. Calculate Counts based on Usable Space
-    # ---------------------------------------------------------
-    # We strip the safety margin from the sheet
+    # 2. Calculate Counts
     usable_x = sheet_length - (2 * TARGET_MIN_MARGIN)
     usable_y = sheet_width - (2 * TARGET_MIN_MARGIN)
-    
-    # X-Axis Count (Visual Width)
-    # Formula: (Count-1)*Pitch + BoundingSize + (Stagger if applicable) <= Usable
-    # Note: Stagger adds width to the total block only if rows are offset.
-    # For Diamond/Half-offset, the visual block is wider by exactly 'stagger_x'.
     
     safe_width_allowance = usable_x - bounding_size - stagger_x
     if safe_width_allowance < 0: count_x = 0
     else: count_x = math.floor(safe_width_allowance / pitch_x) + 1
     
-    # Y-Axis Count
     safe_height_allowance = usable_y - bounding_size
     if safe_height_allowance < 0: count_y = 0
     else: count_y = math.floor(safe_height_allowance / pitch_y) + 1
@@ -119,25 +103,12 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, target_gap, pa
     if count_x <= 0 or count_y <= 0:
         return 0, 0, 0, 0, sheet_length/2, sheet_width/2
 
-    # ---------------------------------------------------------
-    # 3. Calculate Exact Margins (Centering)
-    # ---------------------------------------------------------
-    # Actual total visual width of the pattern block
+    # 3. Calculate Margins
     total_pattern_w = bounding_size + ((count_x - 1) * pitch_x) + stagger_x
     total_pattern_h = bounding_size + ((count_y - 1) * pitch_y)
 
     margin_x = (sheet_length - total_pattern_w) / 2
     margin_y = (sheet_width - total_pattern_h) / 2
-    
-    # ---------------------------------------------------------
-    # 4. Enforce "Equal Margins" (Square Frame)
-    # ---------------------------------------------------------
-    # If you want Top/Bottom to equal Left/Right, we pick the larger margin.
-    # However, forcing this might reduce the count in one direction.
-    # To be safe and simple: We accept the calculated symmetrical centers.
-    # If strictly "Equal All Around" is needed, we'd use max(margin_x, margin_y) 
-    # but that might cut off rows. Usually "Centered" is what users mean by "Equal".
-    # I will stick to Perfect Centering which guarantees Left=Right and Top=Bottom.
     
     return count_x, count_y, pitch_x, pitch_y, margin_x, margin_y
 
@@ -150,6 +121,7 @@ async def generate_dxf(payload: dict = Body(...)):
         payload = payload[0]
 
     raw_pattern = payload.get("pattern", "Squares 10x10mm")
+    # Fallback to standard squares if not found
     cfg = PATTERN_MAP.get(raw_pattern, PATTERN_MAP["Squares 10x10mm"])
     pattern = cfg["pattern"]
 
@@ -160,6 +132,9 @@ async def generate_dxf(payload: dict = Body(...)):
 
     spacing = cfg["spacing"]
     offset_mode = cfg["offset"]
+    
+    # 🆕 Extract grouping config if it exists (For Q+)
+    grouping = cfg.get("grouping", None)
 
     # ============================
     # 1. Determine Base Hole Size
@@ -172,9 +147,6 @@ async def generate_dxf(payload: dict = Body(...)):
     elif pattern == "circle":
         hole_base_size = cfg.get("hole_diameter", 10)
     elif pattern == "slot":
-        # Slot logic uses length for spacing calculations? 
-        # Actually slot logic is complex, sticking to simple "spacing" adder for now
-        # unless it's diamond.
         hole_base_size = cfg.get("slot_length", 35)
         hole_w = cfg.get("slot_length", 35)
         hole_h = cfg.get("slot_width", 10)
@@ -186,9 +158,7 @@ async def generate_dxf(payload: dict = Body(...)):
         length, width, hole_base_size, spacing, pattern
     )
     
-    # Recalculate hole bounding box for drawing loop
     if pattern == "diamond":
-        # 10mm side -> 14.14mm diagonal width
         bbox_size = hole_base_size * math.sqrt(2)
         hole_w, hole_h = bbox_size, bbox_size
 
@@ -209,38 +179,56 @@ async def generate_dxf(payload: dict = Body(...)):
     
     while row < rows:
         current_offset = 0
-        
-        # Stagger logic
         if offset_mode == "half" and row % 2 != 0:
             current_offset = pitch_x / 2
         
+        # Determine X start
         x = margin_x + current_offset
         col = 0
 
         while col < cols:
-            # Draw shapes
-            if pattern == "square":
-                msp.add_lwpolyline(
-                    [(x,y), (x+hole_w,y), (x+hole_w,y+hole_h), (x,y+hole_h), (x,y)],
-                    dxfattribs={"layer":"PATTERN"}
-                )
-            elif pattern == "diamond":
-                # Diamond inscribed in bounding box
-                cx, cy = x + hole_w/2, y + hole_h/2
-                msp.add_lwpolyline(
-                    [(cx, y), (x+hole_w, cy), (cx, y+hole_h), (x, cy), (cx, y)],
-                    dxfattribs={"layer":"PATTERN"}
-                )
-            elif pattern == "circle":
-                r = hole_w / 2
-                msp.add_circle((x+r, y+r), r, dxfattribs={"layer":"PATTERN"})
             
-            elif pattern == "slot":
-                r = hole_h / 2
-                msp.add_line((x+r, y+hole_h), (x+hole_w-r, y+hole_h), dxfattribs={"layer": "PATTERN"})
-                msp.add_line((x+r, y), (x+hole_w-r, y), dxfattribs={"layer": "PATTERN"})
-                msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer": "PATTERN"})
-                msp.add_arc((x+hole_w-r, y+r), r, -90, 90, dxfattribs={"layer": "PATTERN"})
+            # =====================================================
+            # 🆕 LOGIC: SKIP ZONE (For Q+ Pattern)
+            # =====================================================
+            should_draw = True
+            
+            if grouping:
+                # Calculate relative position from the START of the pattern
+                rel_x = x - margin_x
+                
+                # Full cycle = Filled Width + Gap Width
+                cycle = grouping["fill_width"] + grouping["gap_width"]
+                
+                # Where are we in the current cycle?
+                pos_in_cycle = rel_x % cycle
+                
+                # If we are past the fill width, we are in the gap. SKIP.
+                # (We add a tiny buffer to avoid floating point edge cases)
+                if pos_in_cycle > (grouping["fill_width"] + 1): 
+                    should_draw = False
+
+            if should_draw:
+                if pattern == "square":
+                    msp.add_lwpolyline(
+                        [(x,y), (x+hole_w,y), (x+hole_w,y+hole_h), (x,y+hole_h), (x,y)],
+                        dxfattribs={"layer":"PATTERN"}
+                    )
+                elif pattern == "diamond":
+                    cx, cy = x + hole_w/2, y + hole_h/2
+                    msp.add_lwpolyline(
+                        [(cx, y), (x+hole_w, cy), (cx, y+hole_h), (x, cy), (cx, y)],
+                        dxfattribs={"layer":"PATTERN"}
+                    )
+                elif pattern == "circle":
+                    r = hole_w / 2
+                    msp.add_circle((x+r, y+r), r, dxfattribs={"layer":"PATTERN"})
+                elif pattern == "slot":
+                    r = hole_h / 2
+                    msp.add_line((x+r, y+hole_h), (x+hole_w-r, y+hole_h), dxfattribs={"layer": "PATTERN"})
+                    msp.add_line((x+r, y), (x+hole_w-r, y), dxfattribs={"layer": "PATTERN"})
+                    msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer": "PATTERN"})
+                    msp.add_arc((x+hole_w-r, y+r), r, -90, 90, dxfattribs={"layer": "PATTERN"})
 
             x += pitch_x
             col += 1
@@ -257,10 +245,9 @@ async def generate_dxf(payload: dict = Body(...)):
         "file_name": os.path.basename(filename),
         "file_base64": encoded,
         "debug": {
-            "pitch_x": round(pitch_x, 2),
-            "pitch_y": round(pitch_y, 2),
-            "gap_setting": spacing,
-            "margin_x": round(margin_x, 2),
-            "margin_y": round(margin_y, 2)
+             "type": pattern,
+             "is_grouped": grouping is not None,
+             "margin_x": round(margin_x, 2),
+             "margin_y": round(margin_y, 2)
         }
     }
