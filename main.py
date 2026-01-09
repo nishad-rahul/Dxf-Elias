@@ -16,22 +16,22 @@ PATTERN_MAP = {
         "spacing": 10, 
         "offset": "half",
     },
-    # 🆕 Q+ PATTERN (Squares Grouped)
+    # 8 Columns Grouped Pattern
     "Squares Grouped": {
         "pattern": "square",
         "hole_size": 10,
         "spacing": 10,
-        "offset": "none",   # ⚠️ GRID ALIGNMENT (Single straight line)
+        "offset": "none",   
         "grouping": {
-            "col_count": 8,  # ⚠️ 8 Columns wide
-            "gap_size": 70.0 # ⚠️ 70mm Gap between groups
+            "col_count": 8,  
+            "gap_size": 70.0 
         }
     },
     "Check 10x10mm": {
         "pattern": "diamond",
         "hole_size": 10, 
-        "spacing": 5.1,    # Bridge gap 5.1mm
-        "offset": "half",  # Staggered
+        "spacing": 5.1,    
+        "offset": "half",  
     },
     "Round hole 10mm": {
         "pattern": "circle",
@@ -70,50 +70,62 @@ def draw_rounded_rectangle(msp, x, y, w, h, r, layer):
 def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, pattern_type, grouping=None):
     TARGET_MIN_MARGIN = 17.0 
     
-    # ---------------------------------------
     # 1. Define Standard Pitch
-    # ---------------------------------------
     if pattern_type == "diamond":
         pitch_x = (item_size + spacing) * math.sqrt(2)
         pitch_y = pitch_x / 2
         stagger_x = pitch_x / 2
         bounding_size = item_size * math.sqrt(2)
     else:
+        # Standard logic (Square / Circle / Slot)
         pitch_x = item_size + spacing
-        pitch_y = item_size + spacing
+        pitch_y = item_size + spacing # Slots might need different Y spacing? Usually square pitch is fine for layout.
+        
+        # If Slot, we usually want pitch_y to be based on WIDTH (10mm) not LENGTH (35mm)
+        # But 'item_size' passed in here is usually the Width (X-axis size).
+        # We need to handle Y-axis pitch carefully if item is rectangular.
+        
+        # FIX FOR SLOT Y-PITCH:
+        # If it's a slot, the item_size passed is 35 (Length). 
+        # But for Y-axis packing, we only need to clear the Height (10mm).
+        # We will adjust pitch_y inside the loop if needed, but for now let's assume square grid 
+        # unless explicitly overridden.
+        
+        if pattern_type == "slot":
+             # Force Y pitch to be based on 10mm width + spacing, not 35mm length
+             pitch_y = 10.0 + spacing
+        else:
+             pitch_y = item_size + spacing
+
         stagger_x = (pitch_x / 2)
         bounding_size = item_size
 
-    # ---------------------------------------
-    # 2. Special Logic for GROUPED Patterns (Q+)
-    # ---------------------------------------
+    # 2. Q+ Grouped Logic
     if grouping:
         cols_per_group = grouping["col_count"]
         gap_size = grouping["gap_size"]
         
-        # Visual Width of ONE group (8 columns + 7 internal gaps)
         group_visual_width = (cols_per_group * item_size) + ((cols_per_group - 1) * spacing)
-        
-        # Stride = Distance from Start of Group 1 to Start of Group 2
         group_stride = group_visual_width + gap_size
         
         usable_x = sheet_length - (2 * TARGET_MIN_MARGIN)
         
-        # How many full groups fit?
         num_groups = math.floor((usable_x + gap_size) / group_stride)
         if num_groups < 1: num_groups = 1 
         
-        # Calculate Total Width of the Pattern Block
         total_pattern_w = (num_groups * group_visual_width) + ((num_groups - 1) * gap_size)
-        
-        # Determine X Margin (Centering)
         margin_x = (sheet_length - total_pattern_w) / 2
         
-        # Y-axis behaves like standard square grid
         usable_y = sheet_width - (2 * TARGET_MIN_MARGIN)
-        safe_h = usable_y - bounding_size
-        count_y = math.floor(safe_h / pitch_y) + 1
-        total_pattern_h = bounding_size + ((count_y - 1) * pitch_y)
+        safe_h = usable_y - bounding_size # Bounding size here is actually X width... might be issue for slot?
+        
+        # Re-calc safe height using Pitch Y
+        # For slots, we use the Y-Pitch calculated above
+        count_y = math.floor((usable_y - 10) / pitch_y) + 1 # 10 is approx slot height
+        if count_y < 0: count_y = 0
+
+        # Recalculate exact Y margin
+        total_pattern_h = 10 + ((count_y - 1) * pitch_y) # 10 is slot height
         margin_y = (sheet_width - total_pattern_h) / 2
         
         return {
@@ -128,22 +140,24 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
             "count_y": count_y
         }
 
-    # ---------------------------------------
-    # 3. Standard Logic (Non-Grouped)
-    # ---------------------------------------
+    # 3. Standard Logic
     usable_x = sheet_length - (2 * TARGET_MIN_MARGIN)
     usable_y = sheet_width - (2 * TARGET_MIN_MARGIN)
     
+    # Check X fit
     safe_w = usable_x - bounding_size - stagger_x
     if safe_w < 0: count_x = 0
     else: count_x = math.floor(safe_w / pitch_x) + 1
     
-    safe_h = usable_y - bounding_size
+    # Check Y fit (Adjusted for Slot Height vs Width)
+    item_h = 10 if pattern_type == "slot" else bounding_size
+    
+    safe_h = usable_y - item_h
     if safe_h < 0: count_y = 0
     else: count_y = math.floor(safe_h / pitch_y) + 1
 
     total_pattern_w = bounding_size + ((count_x - 1) * pitch_x) + stagger_x
-    total_pattern_h = bounding_size + ((count_y - 1) * pitch_y)
+    total_pattern_h = item_h + ((count_y - 1) * pitch_y)
 
     margin_x = (sheet_length - total_pattern_w) / 2
     margin_y = (sheet_width - total_pattern_h) / 2
@@ -178,9 +192,12 @@ async def generate_dxf(payload: dict = Body(...)):
     offset_mode = cfg["offset"]
     grouping = cfg.get("grouping", None)
 
-    # 1. Base Hole Size
+    # ============================================================
+    # 1. Base Hole Size (FIXED)
+    # ============================================================
     hole_w, hole_h = 10, 10 
     hole_base = 10
+    
     if pattern == "square" or pattern == "diamond":
         hole_base = cfg.get("hole_size", 10)
         hole_w, hole_h = hole_base, hole_base
@@ -188,6 +205,9 @@ async def generate_dxf(payload: dict = Body(...)):
         hole_base = cfg.get("hole_diameter", 10)
         hole_w, hole_h = hole_base, hole_base
     elif pattern == "slot":
+        # ⚠️ FIX: Update hole_base to the Slot LENGTH (35)
+        # This ensures pitch calculation uses 35mm, not default 10mm
+        hole_base = cfg.get("slot_length", 35) 
         hole_w = cfg.get("slot_length", 35)
         hole_h = cfg.get("slot_width", 10)
 
@@ -222,11 +242,8 @@ async def generate_dxf(payload: dict = Body(...)):
         if offset_mode == "half" and row % 2 != 0:
             row_offset = pitch_x / 2
         
-        # -------------------------------------------------
-        # DRAWING STRATEGY
-        # -------------------------------------------------
+        # GROUPED LOGIC (Q+)
         if layout["is_grouped"]:
-            # Q+ Logic: Draw specific columns per group
             num_groups = layout["num_groups"]
             cols_per_group = layout["cols_per_group"]
             group_stride = layout["group_stride"]
@@ -235,14 +252,12 @@ async def generate_dxf(payload: dict = Body(...)):
             for g in range(num_groups):
                 group_start_x = start_x + (g * group_stride)
                 for c in range(cols_per_group):
-                    # No row_offset here because Q+ offset is "none"
                     x = group_start_x + (c * pitch_x)
-                    
                     if pattern == "square":
                          msp.add_lwpolyline([(x,y),(x+hole_w,y),(x+hole_w,y+hole_h),(x,y+hole_h),(x,y)], dxfattribs={"layer":"PATTERN"})
         
+        # STANDARD LOGIC
         else:
-            # Standard Logic
             count_x = layout["count_x"]
             x_start = layout["margin_x"] + row_offset
             
@@ -258,11 +273,17 @@ async def generate_dxf(payload: dict = Body(...)):
                 elif pattern == "circle":
                     r = hole_w / 2
                     msp.add_circle((x+r, y+r), r, dxfattribs={"layer":"PATTERN"})
+                
                 elif pattern == "slot":
+                    # Draw Stadium
                     r = hole_h / 2
+                    # Top Line
                     msp.add_line((x+r, y+hole_h), (x+hole_w-r, y+hole_h), dxfattribs={"layer": "PATTERN"})
+                    # Bottom Line
                     msp.add_line((x+r, y), (x+hole_w-r, y), dxfattribs={"layer": "PATTERN"})
+                    # Left Arc (90 to 270)
                     msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer": "PATTERN"})
+                    # Right Arc (-90 to 90)
                     msp.add_arc((x+hole_w-r, y+r), r, -90, 90, dxfattribs={"layer": "PATTERN"})
 
         y += pitch_y
