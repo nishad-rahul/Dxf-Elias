@@ -16,7 +16,7 @@ PATTERN_MAP = {
         "spacing": 10, 
         "offset": "half",
     },
-    # 8 Columns Grouped Pattern
+    # 8 Columns Grouped Pattern (Q+)
     "Squares Grouped": {
         "pattern": "square",
         "hole_size": 10,
@@ -79,20 +79,9 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
     else:
         # Standard logic (Square / Circle / Slot)
         pitch_x = item_size + spacing
-        pitch_y = item_size + spacing # Slots might need different Y spacing? Usually square pitch is fine for layout.
         
-        # If Slot, we usually want pitch_y to be based on WIDTH (10mm) not LENGTH (35mm)
-        # But 'item_size' passed in here is usually the Width (X-axis size).
-        # We need to handle Y-axis pitch carefully if item is rectangular.
-        
-        # FIX FOR SLOT Y-PITCH:
-        # If it's a slot, the item_size passed is 35 (Length). 
-        # But for Y-axis packing, we only need to clear the Height (10mm).
-        # We will adjust pitch_y inside the loop if needed, but for now let's assume square grid 
-        # unless explicitly overridden.
-        
+        # Slot Pitch Fix: use 10mm width for Y-spacing, not 35mm length
         if pattern_type == "slot":
-             # Force Y pitch to be based on 10mm width + spacing, not 35mm length
              pitch_y = 10.0 + spacing
         else:
              pitch_y = item_size + spacing
@@ -117,15 +106,12 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         margin_x = (sheet_length - total_pattern_w) / 2
         
         usable_y = sheet_width - (2 * TARGET_MIN_MARGIN)
-        safe_h = usable_y - bounding_size # Bounding size here is actually X width... might be issue for slot?
+        safe_h = usable_y - bounding_size 
         
-        # Re-calc safe height using Pitch Y
-        # For slots, we use the Y-Pitch calculated above
-        count_y = math.floor((usable_y - 10) / pitch_y) + 1 # 10 is approx slot height
+        count_y = math.floor((usable_y - 10) / pitch_y) + 1 # approx height for slot/square
         if count_y < 0: count_y = 0
 
-        # Recalculate exact Y margin
-        total_pattern_h = 10 + ((count_y - 1) * pitch_y) # 10 is slot height
+        total_pattern_h = 10 + ((count_y - 1) * pitch_y)
         margin_y = (sheet_width - total_pattern_h) / 2
         
         return {
@@ -144,12 +130,10 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
     usable_x = sheet_length - (2 * TARGET_MIN_MARGIN)
     usable_y = sheet_width - (2 * TARGET_MIN_MARGIN)
     
-    # Check X fit
     safe_w = usable_x - bounding_size - stagger_x
     if safe_w < 0: count_x = 0
     else: count_x = math.floor(safe_w / pitch_x) + 1
     
-    # Check Y fit (Adjusted for Slot Height vs Width)
     item_h = 10 if pattern_type == "slot" else bounding_size
     
     safe_h = usable_y - item_h
@@ -179,9 +163,12 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
 async def generate_dxf(payload: dict = Body(...)):
     if isinstance(payload, list): payload = payload[0]
 
+    # Get the raw pattern name (e.g. "Squares Grouped")
     raw_pattern = payload.get("pattern", "Squares 10x10mm")
+    
+    # Get configuration based on that name
     cfg = PATTERN_MAP.get(raw_pattern, PATTERN_MAP["Squares 10x10mm"])
-    pattern = cfg["pattern"]
+    pattern = cfg["pattern"] # This is the internal shape type (e.g. "square")
 
     customer = str(payload.get("customer", "Variant_A")).replace(" ", "_")
     length = float(payload.get("length", 500))
@@ -192,9 +179,7 @@ async def generate_dxf(payload: dict = Body(...)):
     offset_mode = cfg["offset"]
     grouping = cfg.get("grouping", None)
 
-    # ============================================================
-    # 1. Base Hole Size (FIXED)
-    # ============================================================
+    # 1. Base Hole Size
     hole_w, hole_h = 10, 10 
     hole_base = 10
     
@@ -205,8 +190,6 @@ async def generate_dxf(payload: dict = Body(...)):
         hole_base = cfg.get("hole_diameter", 10)
         hole_w, hole_h = hole_base, hole_base
     elif pattern == "slot":
-        # ⚠️ FIX: Update hole_base to the Slot LENGTH (35)
-        # This ensures pitch calculation uses 35mm, not default 10mm
         hole_base = cfg.get("slot_length", 35) 
         hole_w = cfg.get("slot_length", 35)
         hole_h = cfg.get("slot_width", 10)
@@ -220,7 +203,14 @@ async def generate_dxf(payload: dict = Body(...)):
 
     # 3. DXF Setup
     os.makedirs("output_dxf", exist_ok=True)
-    filename = f"output_dxf/{customer}_{pattern}.dxf"
+    
+    # ============================================================
+    # ⚠️ UPDATED FILENAME LOGIC
+    # Uses 'raw_pattern' (e.g. "Squares_Grouped") instead of just "square"
+    # ============================================================
+    safe_pattern_name = raw_pattern.replace(" ", "_")
+    filename = f"output_dxf/{customer}_{safe_pattern_name}.dxf"
+    
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
     doc.layers.new(name="OUTLINE")
@@ -242,7 +232,7 @@ async def generate_dxf(payload: dict = Body(...)):
         if offset_mode == "half" and row % 2 != 0:
             row_offset = pitch_x / 2
         
-        # GROUPED LOGIC (Q+)
+        # GROUPED LOGIC
         if layout["is_grouped"]:
             num_groups = layout["num_groups"]
             cols_per_group = layout["cols_per_group"]
@@ -273,17 +263,11 @@ async def generate_dxf(payload: dict = Body(...)):
                 elif pattern == "circle":
                     r = hole_w / 2
                     msp.add_circle((x+r, y+r), r, dxfattribs={"layer":"PATTERN"})
-                
                 elif pattern == "slot":
-                    # Draw Stadium
                     r = hole_h / 2
-                    # Top Line
                     msp.add_line((x+r, y+hole_h), (x+hole_w-r, y+hole_h), dxfattribs={"layer": "PATTERN"})
-                    # Bottom Line
                     msp.add_line((x+r, y), (x+hole_w-r, y), dxfattribs={"layer": "PATTERN"})
-                    # Left Arc (90 to 270)
                     msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer": "PATTERN"})
-                    # Right Arc (-90 to 90)
                     msp.add_arc((x+hole_w-r, y+r), r, -90, 90, dxfattribs={"layer": "PATTERN"})
 
         y += pitch_y
