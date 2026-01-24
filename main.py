@@ -163,12 +163,12 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
 async def generate_dxf(payload: dict = Body(...)):
     if isinstance(payload, list): payload = payload[0]
 
-    # Get the raw pattern name (e.g. "Squares Grouped")
+    # Get the raw pattern name
     raw_pattern = payload.get("pattern", "Squares 10x10mm")
     
     # Get configuration based on that name
     cfg = PATTERN_MAP.get(raw_pattern, PATTERN_MAP["Squares 10x10mm"])
-    pattern = cfg["pattern"] # This is the internal shape type (e.g. "square")
+    pattern = cfg["pattern"] 
 
     customer = str(payload.get("customer", "Variant_A")).replace(" ", "_")
     length = float(payload.get("length", 500))
@@ -205,11 +205,13 @@ async def generate_dxf(payload: dict = Body(...)):
     os.makedirs("output_dxf", exist_ok=True)
     
     # ============================================================
-    # ⚠️ UPDATED FILENAME LOGIC
-    # Uses 'raw_pattern' (e.g. "Squares_Grouped") instead of just "square"
+    # ⚠️ UPDATED FILENAME LOGIC (Name + Dimensions)
+    # Format: {Name}_{Length}x{Width}.dxf  (e.g. Thomas_900x700.dxf)
     # ============================================================
-    safe_pattern_name = raw_pattern.replace(" ", "_")
-    filename = f"output_dxf/{customer}_{safe_pattern_name}.dxf"
+    l_str = int(length) if length.is_integer() else length
+    w_str = int(width) if width.is_integer() else width
+    
+    filename = f"output_dxf/{customer}_{l_str}x{w_str}.dxf"
     
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
@@ -232,7 +234,7 @@ async def generate_dxf(payload: dict = Body(...)):
         if offset_mode == "half" and row % 2 != 0:
             row_offset = pitch_x / 2
         
-        # GROUPED LOGIC
+        # GROUPED LOGIC (Q+)
         if layout["is_grouped"]:
             num_groups = layout["num_groups"]
             cols_per_group = layout["cols_per_group"]
