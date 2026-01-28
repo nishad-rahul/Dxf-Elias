@@ -21,9 +21,10 @@ PATTERN_MAP = {
 }
 
 # =========================================================
-# Helper: Standard Pack Logic (Used for all except Q+)
+# Helper: Strict Standard Packing Logic (Keeps other variants same)
 # =========================================================
 def get_standard_count(available, item, pitch, stagger=0):
+    # Returns the maximum items that fit with at least 17mm safety margin total
     return max(1, math.floor((available - item - stagger - 34) / pitch) + 1)
 
 # =========================================================
@@ -49,28 +50,23 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         base_gap = grouping["gap_size"]
         best_col_count = 8
         
-        # We find the col_count that results in the most balanced 
-        # margin >= 20mm to prevent the "too small" margin error.
-        for c in range(8, 100):
+        # Aggressive search: maximize columns per group until margin is minimal (>= 17mm)
+        for c in range(8, 200): 
             g_w = (c * item_size) + ((c - 1) * spacing)
             g_stride = g_w + base_gap
-            n_g = max(1, math.floor((sheet_length + base_gap) / g_stride))
+            n_g = max(1, math.floor((sheet_length + base_gap - 34) / g_stride))
             pat_w = (n_g * g_w) + ((n_g - 1) * base_gap)
             margin = (sheet_length - pat_w) / 2
             
-            # If the margin is still safe, update best_col_count
-            if margin >= 20.0:
+            if margin >= 17.0:
                 best_col_count = c
             else:
-                # If adding more columns makes the margin < 20mm, stop.
-                break
+                break # Stop once we violate the 17mm limit
         
-        # Calculate final grouped dimensions
         final_g_w = (best_col_count * item_size) + ((best_col_count - 1) * spacing)
-        final_n_g = max(1, math.floor((sheet_length + base_gap) / (final_g_w + base_gap)))
+        final_n_g = max(1, math.floor((sheet_length + base_gap - 34) / (final_g_w + base_gap)))
         final_pat_w = (final_n_g * final_g_w) + ((final_n_g - 1) * base_gap)
         
-        # Y-axis packing for Q+ (standard tight fit)
         count_y = get_standard_count(sheet_width, 10 if pattern_type == "slot" else item_size, pitch_y)
         final_pat_h = (10 if pattern_type == "slot" else item_size) + ((count_y - 1) * pitch_y)
         
@@ -83,7 +79,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         }
 
     # ---------------------------------------------------------
-    # OTHER VARIANTS: KEEP SAME TO SAME AS PREVIOUS CODE
+    # OTHER VARIANTS: REMAIN "SAME TO SAME"
     # ---------------------------------------------------------
     count_x = get_standard_count(sheet_length, bounding_size, pitch_x, stagger_x)
     item_h = 10 if pattern_type == "slot" else bounding_size
@@ -100,7 +96,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
     }
 
 # =========================================================
-# DXF Generator Endpoint
+# DXF Generator Endpoint (Same to Same)
 # =========================================================
 @app.post("/generate_dxf")
 async def generate_dxf(payload: dict = Body(...)):
