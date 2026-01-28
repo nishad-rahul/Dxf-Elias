@@ -16,14 +16,15 @@ PATTERN_MAP = {
         "spacing": 10, 
         "offset": "half",
     },
+    # Q+ Pattern: 'col_count' is now a starting point/fallback
     "Squares Grouped": {
         "pattern": "square",
         "hole_size": 10,
         "spacing": 10,
         "offset": "none",   
         "grouping": {
-            "col_count": 8,  
-            "gap_size": 70.0 
+            "col_count": 8,   # Default start
+            "gap_size": 70.0  # Fixed gap
         }
     },
     "Check 10x10mm": {
@@ -76,31 +77,96 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         stagger_x = pitch_x / 2
         bounding_size = item_size * math.sqrt(2)
     else:
+        # Standard logic
         pitch_x = item_size + spacing
-        # Fix for Slot Y-Pitch
+        
         if pattern_type == "slot":
              pitch_y = 10.0 + spacing
         else:
              pitch_y = item_size + spacing
+
         stagger_x = (pitch_x / 2)
         bounding_size = item_size
 
-    # 2. Q+ Grouped Logic
+    # 2. Q+ Grouped Logic (DYNAMIC OPTIMIZATION)
     if grouping:
-        cols_per_group = grouping["col_count"]
-        gap_size = grouping["gap_size"]
+        base_gap = grouping["gap_size"]
+        
+        # --- DYNAMIC COLUMN CALCULATION ---
+        # We simulate adding columns (starting from 8) until the margin is ideal (20-50mm)
+        best_col_count = 8
+        best_margin = 9999
+        found_valid = False
+        
+        # Try a range of column counts (e.g., 8 to 50)
+        for c in range(8, 100):
+            # Calculate metrics for 'c' columns
+            # Group Width = (c * size) + ((c-1) * spacing)
+            g_width = (c * item_size) + ((c - 1) * spacing)
+            g_stride = g_width + base_gap
+            
+            # How many groups fit?
+            # Available space = Length - SafetyMargin
+            # But calculating Margin is easier directly:
+            # (N * Width) + ((N-1) * Gap) <= Length
+            
+            # Calc N groups
+            n_groups = math.floor((sheet_length + base_gap) / g_stride)
+            if n_groups < 1: n_groups = 1
+            
+            # Calc Resulting Margin
+            pat_width = (n_groups * g_width) + ((n_groups - 1) * base_gap)
+            margin = (sheet_length - pat_width) / 2
+            
+            # Optimization Criteria:
+            # 1. Margin MUST be >= 20mm (Hard Limit)
+            # 2. Prefer Margin <= 50mm (Soft Limit)
+            # 3. If multiple fit, pick closest to 35mm (Sweet Spot)
+            
+            if margin < 20.0:
+                # If margin gets too small, we've added too many columns or groups. 
+                # Stop searching if we already found a valid one.
+                if found_valid: 
+                    break 
+                # If we haven't found valid yet, keep going (though increasing col count usually reduces margin, 
+                # unless N drops, which spikes margin. So we check all).
+            else:
+                # Margin is safe (>= 20)
+                found_valid = True
+                
+                # Calculate how close to sweet spot (35mm)
+                diff = abs(margin - 35.0)
+                
+                # If this is better than what we found before, keep it
+                # Logic: We start from c=8. If c=8 gives 90mm margin, diff is 55.
+                # c=9 gives 60mm margin, diff is 25. Update best.
+                # c=10 gives 30mm margin, diff is 5. Update best.
+                if diff < abs(best_margin - 35.0):
+                    best_margin = margin
+                    best_col_count = c
+                
+                # If we hit a margin that is "good enough" (e.g. 20-50), we could stop early,
+                # but checking a few more is safer.
+        
+        # --- END OPTIMIZATION ---
+        
+        # Apply the Best Found Configuration
+        cols_per_group = best_col_count
+        gap_size = base_gap
         
         group_visual_width = (cols_per_group * item_size) + ((cols_per_group - 1) * spacing)
         group_stride = group_visual_width + gap_size
         
-        usable_x = sheet_length - (2 * TARGET_MIN_MARGIN)
-        num_groups = math.floor((usable_x + gap_size) / group_stride)
+        num_groups = math.floor((sheet_length + gap_size) / group_stride)
         if num_groups < 1: num_groups = 1 
         
         total_pattern_w = (num_groups * group_visual_width) + ((num_groups - 1) * gap_size)
         margin_x = (sheet_length - total_pattern_w) / 2
         
+        # Y-Axis Logic (Standard)
         usable_y = sheet_width - (2 * TARGET_MIN_MARGIN)
+        safe_h = usable_y - bounding_size 
+        
         count_y = math.floor((usable_y - 10) / pitch_y) + 1 
         if count_y < 0: count_y = 0
 
@@ -116,10 +182,12 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
             "pitch_y": pitch_y,
             "margin_x": margin_x,
             "margin_y": margin_y,
-            "count_y": count_y
+            "count_y": count_y,
+            "debug_col_count": cols_per_group, # Info for response
+            "debug_margin": margin_x
         }
 
-    # 3. Standard Logic
+    # 3. Standard Logic (unchanged)
     usable_x = sheet_length - (2 * TARGET_MIN_MARGIN)
     usable_y = sheet_width - (2 * TARGET_MIN_MARGIN)
     
@@ -128,6 +196,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
     else: count_x = math.floor(safe_w / pitch_x) + 1
     
     item_h = 10 if pattern_type == "slot" else bounding_size
+    
     safe_h = usable_y - item_h
     if safe_h < 0: count_y = 0
     else: count_y = math.floor(safe_h / pitch_y) + 1
@@ -155,7 +224,6 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
 async def generate_dxf(payload: dict = Body(...)):
     if isinstance(payload, list): payload = payload[0]
 
-    # Pattern Setup
     raw_pattern = payload.get("pattern", "Squares 10x10mm")
     cfg = PATTERN_MAP.get(raw_pattern, PATTERN_MAP["Squares 10x10mm"])
     pattern = cfg["pattern"]
@@ -165,7 +233,6 @@ async def generate_dxf(payload: dict = Body(...)):
     width = float(payload.get("width", 300))
     corner_radius = float(payload.get("corner_radius", 5))
     
-    # 🆕 CHECK FOR BENT TOP FLAG
     bent_top = payload.get("bent_top", False)
     
     spacing = cfg["spacing"]
@@ -188,15 +255,11 @@ async def generate_dxf(payload: dict = Body(...)):
         hole_h = cfg.get("slot_width", 10)
 
     # ============================================================
-    # 🆕 BENDING LOGIC
+    # 2. CALCULATE LAYOUT
     # ============================================================
-    # We calculate the pattern based on the ORIGINAL width (e.g. 500)
-    # This keeps the margins uniform for the main face.
     layout = calculate_layout_params(length, width, hole_base, spacing, pattern, grouping)
     
-    # We draw the sheet using the ADJUSTED width (e.g. 505.1)
-    # Since we start drawing pattern at y = margin_y (bottom), 
-    # the extra 5.1mm is added purely to the top.
+    # Bending Logic Adjustment
     final_dxf_width = width
     if bent_top:
         final_dxf_width = width + 5.1
@@ -208,8 +271,7 @@ async def generate_dxf(payload: dict = Body(...)):
     # 3. DXF Setup
     os.makedirs("output_dxf", exist_ok=True)
     
-    # Filename: Uses the FINAL DXF dimensions (e.g. 505.1)
-    # Format: Name_LengthxWidth.dxf
+    # Filename Logic: Name_LengthxWidth.dxf
     l_str = int(length) if length.is_integer() else length
     w_str = int(final_dxf_width) if final_dxf_width.is_integer() else final_dxf_width
     
@@ -220,7 +282,6 @@ async def generate_dxf(payload: dict = Body(...)):
     doc.layers.new(name="OUTLINE")
     doc.layers.new(name="PATTERN")
 
-    # Draw Outline with potentially extended width
     draw_rounded_rectangle(msp, 0, 0, length, final_dxf_width, corner_radius, "OUTLINE")
 
     # 4. Drawing Loop
@@ -282,5 +343,9 @@ async def generate_dxf(payload: dict = Body(...)):
     return {
         "status": "ok",
         "file_name": os.path.basename(filename),
-        "file_base64": encoded
+        "file_base64": encoded,
+        "debug": {
+            "chosen_columns": layout.get("debug_col_count"),
+            "final_margin": layout.get("debug_margin")
+        }
     }
