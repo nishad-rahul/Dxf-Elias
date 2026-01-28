@@ -7,7 +7,7 @@ import math
 app = FastAPI()
 
 # =========================================================
-# Pattern Configuration
+# Pattern Configuration (Same to Same)
 # =========================================================
 PATTERN_MAP = {
     "Squares 10x10mm": {"pattern": "square", "hole_size": 10, "spacing": 10, "offset": "half"},
@@ -21,22 +21,16 @@ PATTERN_MAP = {
 }
 
 # =========================================================
-# Helper: Optimized Count (Forces Tight 17-20mm Margin)
+# Helper: Standard Pack Logic (Used for all except Q+)
 # =========================================================
-def optimize_tight_count(available_length, item_size, pitch, stagger_offset=0):
-    """
-    Calculates the maximum count to ensure margins are as small as possible 
-    (ideally 17mm to 20mm).
-    """
-    # Formula: (Count-1)*Pitch + ItemSize + Stagger + (2 * 17) <= Available
-    max_c = math.floor((available_length - item_size - stagger_offset - 34) / pitch) + 1
-    return max(1, max_c)
+def get_standard_count(available, item, pitch, stagger=0):
+    return max(1, math.floor((available - item - stagger - 34) / pitch) + 1)
 
 # =========================================================
 # Layout Logic
 # =========================================================
 def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, pattern_type, grouping=None):
-    # 1. Define Pitch
+    # Standard Pitch Calculations
     if pattern_type == "diamond":
         pitch_x = (item_size + spacing) * math.sqrt(2)
         pitch_y = pitch_x / 2
@@ -48,32 +42,36 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         stagger_x = (pitch_x / 2)
         bounding_size = item_size
 
-    # 2. Q+ GREEDY OPTIMIZATION (Force Margin < 20mm)
+    # ---------------------------------------------------------
+    # 🆕 SPECIFIC REFINEMENT FOR Q+ (SQUARES GROUPED)
+    # ---------------------------------------------------------
     if grouping:
         base_gap = grouping["gap_size"]
         best_col_count = 8
         
-        # We start at 8 columns and keep adding columns until the margin 
-        # is as small as possible without going under 17mm.
-        for c in range(8, 150):
+        # We find the col_count that results in the most balanced 
+        # margin >= 20mm to prevent the "too small" margin error.
+        for c in range(8, 100):
             g_w = (c * item_size) + ((c - 1) * spacing)
             g_stride = g_w + base_gap
             n_g = max(1, math.floor((sheet_length + base_gap) / g_stride))
             pat_w = (n_g * g_w) + ((n_g - 1) * base_gap)
             margin = (sheet_length - pat_w) / 2
             
-            if margin >= 17.0:
+            # If the margin is still safe, update best_col_count
+            if margin >= 20.0:
                 best_col_count = c
-            if margin < 17.0:
-                # Once we hit the safety limit, the previous 'c' was our tightest fit
+            else:
+                # If adding more columns makes the margin < 20mm, stop.
                 break
         
-        # Recalculate with the tightest column count found
+        # Calculate final grouped dimensions
         final_g_w = (best_col_count * item_size) + ((best_col_count - 1) * spacing)
         final_n_g = max(1, math.floor((sheet_length + base_gap) / (final_g_w + base_gap)))
         final_pat_w = (final_n_g * final_g_w) + ((final_n_g - 1) * base_gap)
         
-        count_y = optimize_tight_count(sheet_width, 10 if pattern_type == "slot" else item_size, pitch_y)
+        # Y-axis packing for Q+ (standard tight fit)
+        count_y = get_standard_count(sheet_width, 10 if pattern_type == "slot" else item_size, pitch_y)
         final_pat_h = (10 if pattern_type == "slot" else item_size) + ((count_y - 1) * pitch_y)
         
         return {
@@ -84,10 +82,12 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
             "count_y": count_y
         }
 
-    # 3. Standard Optimization (Strictly packed)
-    count_x = optimize_tight_count(sheet_length, bounding_size, pitch_x, stagger_x)
+    # ---------------------------------------------------------
+    # OTHER VARIANTS: KEEP SAME TO SAME AS PREVIOUS CODE
+    # ---------------------------------------------------------
+    count_x = get_standard_count(sheet_length, bounding_size, pitch_x, stagger_x)
     item_h = 10 if pattern_type == "slot" else bounding_size
-    count_y = optimize_tight_count(sheet_width, item_h, pitch_y)
+    count_y = get_standard_count(sheet_width, item_h, pitch_y)
 
     total_w = bounding_size + ((count_x - 1) * pitch_x) + stagger_x
     total_h = item_h + ((count_y - 1) * pitch_y)
@@ -114,14 +114,10 @@ async def generate_dxf(payload: dict = Body(...)):
     length, width = float(payload.get("length", 500)), float(payload.get("width", 300))
     bent_top = payload.get("bent_top", False)
     
-    # Correct Base Sizes for packing logic
     hole_w = 35 if pattern == "slot" else 10
     hole_h = 10 if pattern == "slot" else hole_w
 
-    # Calculate Layout (Packed tight to edges)
     layout = calculate_layout_params(length, width, hole_w, cfg["spacing"], pattern, cfg.get("grouping"))
-    
-    # Extra height for the bend (appears at the top)
     final_width = width + 5.1 if bent_top else width
 
     os.makedirs("output_dxf", exist_ok=True)
@@ -135,7 +131,6 @@ async def generate_dxf(payload: dict = Body(...)):
     # Draw Pattern
     y = layout["margin_y"]
     for row in range(layout["count_y"]):
-        # Horizontal Loop
         if layout["is_grouped"]:
             for g in range(layout["num_groups"]):
                 g_start = layout["margin_x"] + (g * layout["group_stride"])
@@ -157,6 +152,12 @@ async def generate_dxf(payload: dict = Body(...)):
                     msp.add_line((x+r, y+hole_h), (x+hole_w-r, y+hole_h), dxfattribs={"layer":"PATTERN"})
                     msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
                     msp.add_arc((x+hole_w-r, y+r), r, 270, 90, dxfattribs={"layer":"PATTERN"})
+                elif pattern == "diamond":
+                    cx, cy = x + hole_w/2, y + hole_h/2
+                    msp.add_lwpolyline([(cx, y), (x+hole_w, cy), (cx, y+hole_h), (x, cy), (cx, y)], dxfattribs={"layer":"PATTERN"})
+                elif pattern == "circle":
+                    r = hole_w / 2
+                    msp.add_circle((x+r, y+r), r, dxfattribs={"layer":"PATTERN"})
 
         y += layout["pitch_y"]
 
