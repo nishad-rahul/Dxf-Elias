@@ -35,16 +35,15 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
     # 1. HARDCODED LOGIC (ONLY FOR SLOTS)
     # ---------------------------------------------------------
     if pattern_type == "slot":
-        # Fixed Dimensions per your image
+        # Fixed Dimensions
         SLOT_L = 40.0
         SLOT_H = 8.5
-        GAP_X = 8.5        # Fixed 8.5mm gap
-        PITCH_Y = 25.0     # Fixed 25mm vertical pitch
+        GAP_X = 8.5        # Fixed 8.5mm horizontal gap
+        PITCH_Y = 17.0     # Fixed 17mm vertical pitch (Tight spacing)
         
         PITCH_X = SLOT_L + GAP_X
         
         # Calculate Counts (Safe Fit)
-        # Subtract 36mm (18mm per side) as a safety baseline
         count_x = math.floor((sheet_length - 36 - SLOT_L) / PITCH_X) + 1
         count_y = math.floor((sheet_width - 36 - SLOT_H) / PITCH_Y) + 1
         
@@ -52,7 +51,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         total_w = SLOT_L + (count_x - 1) * PITCH_X
         total_h = SLOT_H + (count_y - 1) * PITCH_Y
         
-        # Center the Pattern (Margins will be whatever is left over)
+        # Center the Pattern
         margin_x = (sheet_length - total_w) / 2
         margin_y = (sheet_width - total_h) / 2
         
@@ -67,9 +66,8 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         }
 
     # ---------------------------------------------------------
-    # 2. STANDARD LOGIC (FOR SQUARES, DIAMONDS, CIRCLES)
+    # 2. STANDARD LOGIC
     # ---------------------------------------------------------
-    # Pitch Definitions
     if pattern_type == "diamond":
         pitch_x = (item_size + spacing) * math.sqrt(2)
         pitch_y = pitch_x / 2
@@ -77,20 +75,16 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         bounding_size = item_size * math.sqrt(2)
         item_h = bounding_size
     else:
-        # Squares, Circles, etc.
         pitch_x = item_size + spacing
         pitch_y = item_size + spacing
         stagger_x = pitch_x / 2
         bounding_size = item_size
         item_h = item_size
 
-    # Q+ Grouping Logic (Preserved from previous working versions)
+    # Q+ Grouping
     if grouping:
-         # Use the logic you previously approved for Q+ (or standard if disabled)
-         # For now, falling back to standard centered packing to keep it simple
          pass 
 
-    # Standard Centered Packing
     count_x = max(1, math.floor((sheet_length - bounding_size - stagger_x - 34) / pitch_x) + 1)
     count_y = max(1, math.floor((sheet_width - item_h - 34) / pitch_y) + 1)
     
@@ -119,7 +113,6 @@ async def generate_dxf(payload: dict = Body(...)):
     customer = str(payload.get("customer", "Standard")).replace(" ", "_")
     bent_top = payload.get("bent_top", False)
     
-    # Slot size hardcoded in logic, others come from config
     hole_w = 40.0 if pattern == "slot" else cfg.get("hole_size", 10)
     hole_h = 8.5 if pattern == "slot" else hole_w
 
@@ -139,18 +132,15 @@ async def generate_dxf(payload: dict = Body(...)):
     r = hole_h / 2
     
     for row in range(layout["count_y"]):
-        # Row Offset Logic
         if pattern == "slot":
-            # Hardcoded stagger for slot (half of pitch)
             row_off = (layout["pitch_x"] / 2) if row % 2 != 0 else 0
         else:
-            # Standard offset config for others
             row_off = (layout["pitch_x"] / 2) if cfg.get("offset") == "half" and row % 2 != 0 else 0
             
         x_start = layout["margin_x"] + row_off
-        
-        # Check if stagger pushes last item out of bounds
         current_count = layout["count_x"]
+        
+        # Safe clipping for staggering
         if row_off > 0 and (x_start + (current_count-1)*layout["pitch_x"] + hole_w) > length:
             current_count -= 1
             
