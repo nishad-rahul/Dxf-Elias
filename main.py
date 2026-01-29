@@ -7,7 +7,7 @@ import math
 app = FastAPI()
 
 # =========================================================
-# Pattern Configuration
+# Pattern Configuration (OFFSET INCLUDED)
 # =========================================================
 PATTERN_MAP = {
     "Squares 10x10mm": {"pattern": "square", "hole_size": 10, "spacing": 10, "offset": "half"},
@@ -22,17 +22,17 @@ PATTERN_MAP = {
         "slot_length": 40.0,
         "slot_width": 8.5,
         "spacing": 8.5,
-        "offset": "none"
+        "offset": "half"
     },
 }
 
 # =========================================================
-# Strict Edge-Safe Optimizer
+# Edge-Safe Solver
 # =========================================================
-def solve_axis(available, item, pitch, min_edge=18.0, max_edge=27.0):
+def solve_axis(available, item, pitch, stagger=0.0, min_edge=18.0, max_edge=27.0):
     best = None
     for count in range(1, 1000):
-        used = item + (count - 1) * pitch
+        used = item + (count - 1) * pitch + stagger
         margin = (available - used) / 2
         if margin < min_edge:
             break
@@ -41,24 +41,22 @@ def solve_axis(available, item, pitch, min_edge=18.0, max_edge=27.0):
     return best
 
 # =========================================================
-# Layout Logic (SLOT = IMAGE ACCURATE)
+# Layout Calculator (Slot Correct + Offset)
 # =========================================================
-def calculate_layout_params(sheet_length, sheet_width, pattern_type):
-    if pattern_type != "slot":
-        raise ValueError("This layout solver is ONLY for slot holes")
-
+def calculate_slot_layout(sheet_length, sheet_width, offset):
     SLOT_L = 40.0
     SLOT_H = 8.5
     GAP_X = 8.5
     PITCH_Y = 25.0
 
     pitch_x = SLOT_L + GAP_X
+    stagger_x = pitch_x / 2 if offset == "half" else 0.0
 
-    x_solution = solve_axis(sheet_length, SLOT_L, pitch_x)
+    x_solution = solve_axis(sheet_length, SLOT_L, pitch_x, stagger_x)
     y_solution = solve_axis(sheet_width, SLOT_H, PITCH_Y)
 
     if not x_solution or not y_solution:
-        raise ValueError("No valid layout respecting 18–27mm edge rule")
+        raise ValueError("No valid slot layout respecting 18–27mm edge rule")
 
     count_x, margin_x = x_solution
     count_y, margin_y = y_solution
@@ -69,7 +67,8 @@ def calculate_layout_params(sheet_length, sheet_width, pattern_type):
         "pitch_x": pitch_x,
         "pitch_y": PITCH_Y,
         "margin_x": margin_x,
-        "margin_y": margin_y
+        "margin_y": margin_y,
+        "stagger_x": stagger_x
     }
 
 # =========================================================
@@ -83,6 +82,7 @@ async def generate_dxf(payload: dict = Body(...)):
     raw_pattern = payload.get("pattern", "Squares 10x10mm")
     cfg = PATTERN_MAP.get(raw_pattern)
     pattern = cfg["pattern"]
+    offset = cfg.get("offset", "none")
 
     customer = str(payload.get("customer", "Standard")).replace(" ", "_")
     length = float(payload.get("length", 1000))
@@ -105,18 +105,21 @@ async def generate_dxf(payload: dict = Body(...)):
         (0, final_width), (0, 0)
     ], dxfattribs={"layer": "OUTLINE"})
 
-    # SLOT ONLY
+    # ================= SLOT PATTERN =================
     if pattern == "slot":
-        layout = calculate_layout_params(length, width, "slot")
+        layout = calculate_slot_layout(length, width, offset)
+
         hole_w = 40.0
         hole_h = 8.5
         r = hole_h / 2
 
         y = layout["margin_y"]
         for row in range(layout["count_y"]):
-            x = layout["margin_x"]
+            row_offset = layout["stagger_x"] if (offset == "half" and row % 2 == 1) else 0.0
+            x = layout["margin_x"] + row_offset
+
             for col in range(layout["count_x"]):
-                # slot body
+                # Slot geometry
                 msp.add_line((x + r, y), (x + hole_w - r, y), dxfattribs={"layer": "PATTERN"})
                 msp.add_line((x + r, y + hole_h), (x + hole_w - r, y + hole_h), dxfattribs={"layer": "PATTERN"})
                 msp.add_arc((x + r, y + r), r, 90, 270, dxfattribs={"layer": "PATTERN"})
