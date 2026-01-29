@@ -17,7 +17,6 @@ PATTERN_MAP = {
     },
     "Check 10x10mm": {"pattern": "diamond", "hole_size": 10, "spacing": 5.1, "offset": "half"},
     "Round hole 10mm": {"pattern": "circle", "hole_diameter": 10, "spacing": 10, "offset": "half"},
-    # 🆕 UPDATED: Precise 40x8.5mm Slot Configuration
     "Slotted hole 35x10mm": {
         "pattern": "slot", 
         "slot_length": 40.0, 
@@ -30,23 +29,25 @@ PATTERN_MAP = {
 # =========================================================
 # Helper: Optimized Tight Packing (Target 18-27mm)
 # =========================================================
-def get_optimized_count(available, item, pitch, stagger=0):
-    """Finds the count that forces the margin into the 18-27mm range."""
-    best_count = 1
-    # Test counts from 1 up to a reasonable limit
-    for c in range(1, 500):
+def get_optimized_params(available, item, pitch, stagger=0):
+    """Finds count and margin that fits the 18-27mm standard."""
+    best_c = 1
+    best_margin = 0
+    # Try counts until we find the tightest fit above 18mm
+    for c in range(1, 1000):
         visual_w = item + ((c - 1) * pitch) + stagger
         margin = (available - visual_w) / 2
         if margin < 18.0:
-            break  # Too tight, stop at previous count
-        best_count = c
-    return best_count
+            break
+        best_c = c
+        best_margin = margin
+    return best_c, best_margin
 
 # =========================================================
-# Layout Logic (Strictly Isolated)
+# Layout Logic (Isolated Slot & Q+ Optimization)
 # =========================================================
 def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, pattern_type, grouping=None):
-    # 1. Standard Pitch Calculations
+    # 1. Define Basic Pitch
     if pattern_type == "diamond":
         pitch_x = (item_size + spacing) * math.sqrt(2)
         pitch_y = pitch_x / 2
@@ -54,53 +55,44 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         bounding_size = item_size * math.sqrt(2)
         item_h = bounding_size
     elif pattern_type == "slot":
-        pitch_x = 40.0 + 8.5  # Fixed Horizontal Pitch for Slots
-        pitch_y = 25.0        # 🆕 Fixed Vertical Pitch for Slots
+        pitch_x = 40.0 + 8.5 
+        pitch_y = 25.0        # Exact Vertical Pitch per Image
         stagger_x = pitch_x / 2
         bounding_size = 40.0
         item_h = 8.5
     else:
-        # Squares / Circles
         pitch_x = item_size + spacing
         pitch_y = item_size + spacing
         stagger_x = (pitch_x / 2)
         bounding_size = item_size
         item_h = item_size
 
-    # 2. Q+ Specific Optimization (Flexible 65-70mm Gap)
+    # 2. Q+ Flexible Optimization (65-70mm Gap)
     if grouping:
-        best_col_count = 8
-        # Aggressive search for Q+ to hit the 18-27mm margin
         for c in range(8, 150):
-            for gap in [x * 0.5 for x in range(130, 141)]: # 65.0 - 70.0
+            # Test flexible gap range to hit 18-27mm margin
+            for gap in [x * 0.5 for x in range(130, 141)]: # 65.0 to 70.0
                 g_w = (c * item_size) + ((c - 1) * spacing)
-                g_stride = g_w + gap
-                n_g = max(1, math.floor((sheet_length + gap - 36) / g_stride))
+                n_g = max(1, math.floor((sheet_length + gap - 36) / (g_w + gap)))
                 pat_w = (n_g * g_w) + ((n_g - 1) * gap)
-                margin = (sheet_length - pat_w) / 2
-                if 18 <= margin <= 27:
+                margin_x = (sheet_length - pat_w) / 2
+                
+                if 18 <= margin_x <= 27:
+                    count_y, margin_y = get_optimized_params(sheet_width, item_h, pitch_y)
                     return {
                         "is_grouped": True, "num_groups": n_g, "cols_per_group": c,
-                        "group_stride": g_stride, "pitch_x": pitch_x, "pitch_y": pitch_y,
-                        "margin_x": margin, 
-                        "margin_y": (sheet_width - ((get_optimized_count(sheet_width, item_h, pitch_y) - 1) * pitch_y + item_h)) / 2, 
-                        "count_y": get_optimized_count(sheet_width, item_h, pitch_y)
+                        "group_stride": g_w + gap, "pitch_x": pitch_x, "pitch_y": pitch_y,
+                        "margin_x": margin_x, "margin_y": margin_y, "count_y": count_y
                     }
-        # Fallback if no perfect fit
-        grouping_layout = {"is_grouped": True, "num_groups": 1, "cols_per_group": 8, "group_stride": 80.0} # etc
 
-    # 3. Standard Variants (Slot, Diamond, Circle, Square)
-    count_x = get_optimized_count(sheet_length, bounding_size, pitch_x, stagger_x)
-    count_y = get_optimized_count(sheet_width, item_h, pitch_y)
-
-    total_w = bounding_size + ((count_x - 1) * pitch_x) + stagger_x
-    total_h = item_h + ((count_y - 1) * pitch_y)
+    # 3. Standard Optimization (Strict 18-27mm Borders)
+    count_x, margin_x = get_optimized_params(sheet_length, bounding_size, pitch_x, stagger_x)
+    count_y, margin_y = get_optimized_params(sheet_width, item_h, pitch_y)
 
     return {
         "is_grouped": False, "count_x": count_x, "count_y": count_y,
         "pitch_x": pitch_x, "pitch_y": pitch_y,
-        "margin_x": (sheet_length - total_w) / 2,
-        "margin_y": (sheet_width - total_h) / 2
+        "margin_x": margin_x, "margin_y": margin_y
     }
 
 # =========================================================
@@ -118,7 +110,6 @@ async def generate_dxf(payload: dict = Body(...)):
     length, width = float(payload.get("length", 1000)), float(payload.get("width", 500))
     bent_top = payload.get("bent_top", False)
     
-    # Precise Size handling
     hole_w = 40.0 if pattern == "slot" else cfg.get("hole_size", 10)
     hole_h = 8.5 if pattern == "slot" else hole_w
 
@@ -135,9 +126,11 @@ async def generate_dxf(payload: dict = Body(...)):
     # Draw Outline
     msp.add_lwpolyline([(0,0), (length,0), (length, final_width), (0, final_width), (0,0)], dxfattribs={"layer": "OUTLINE"})
 
-    # Draw Pattern
     y = layout["margin_y"]
     for row in range(layout["count_y"]):
+        # Symmetry Offset for Staggered Rows
+        row_off = (layout["pitch_x"] / 2) if cfg["offset"] == "half" and row % 2 != 0 else 0
+        
         if layout["is_grouped"]:
             for g in range(layout["num_groups"]):
                 g_start = layout["margin_x"] + (g * layout["group_stride"])
@@ -145,11 +138,11 @@ async def generate_dxf(payload: dict = Body(...)):
                     x = g_start + (c * layout["pitch_x"])
                     msp.add_lwpolyline([(x,y),(x+hole_w,y),(x+hole_w,y+hole_h),(x,y+hole_h),(x,y)], dxfattribs={"layer":"PATTERN"})
         else:
-            row_off = (layout["pitch_x"] / 2) if cfg["offset"] == "half" and row % 2 != 0 else 0
             x_start = layout["margin_x"] + row_off
             for c in range(layout["count_x"]):
                 x = x_start + (c * layout["pitch_x"])
-                if x + hole_w > length: continue
+                # Boundary check
+                if x + hole_w > length - 17.0: continue
                 
                 if pattern == "square":
                     msp.add_lwpolyline([(x,y),(x+hole_w,y),(x+hole_w,y+hole_h),(x,y+hole_h),(x,y)], dxfattribs={"layer":"PATTERN"})
