@@ -15,13 +15,14 @@ PATTERN_MAP = {
         "pattern": "square", "hole_size": 10, "spacing": 10, "offset": "none",
         "grouping": {"col_count": 8, "gap_size": 70.0}
     },
+    # EXACT PREVIOUS CONFIG FOR DIAMOND
     "Check 10x10mm": {"pattern": "diamond", "hole_size": 10, "spacing": 5.1, "offset": "half"},
     "Round hole 10mm": {"pattern": "circle", "hole_diameter": 10, "spacing": 10, "offset": "half"},
     
-    # NEW: Herx Standard for Slots (Approved)
+    # HERX CONFIG FOR SLOTS (Confirmed Working)
     "Slotted hole 35x10mm": {
         "pattern": "slot", 
-        "slot_length": 45.0, # Herx size
+        "slot_length": 45.0, 
         "slot_width": 8.5, 
         "spacing": 8.5, 
         "offset": "half"
@@ -29,27 +30,26 @@ PATTERN_MAP = {
 }
 
 # =========================================================
-# Helper: Optimized Count (For Standard Patterns)
+# Helper: Optimized Count (From your provided code)
 # =========================================================
 def optimize_tight_count(available_length, item_size, pitch, stagger_offset=0):
-    # Original formula from your working code
     max_c = math.floor((available_length - item_size - stagger_offset - 34) / pitch) + 1
     return max(1, max_c)
 
 # =========================================================
-# Layout Logic (Hybrid: Herx for Slots, Standard for Others)
+# Layout Logic
 # =========================================================
 def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, pattern_type, grouping=None):
 
     # ---------------------------------------------------------
-    # 1. HERX LOGIC (ONLY FOR SLOTS) - Confirmed Working
+    # 1. SPECIAL HERX LOGIC FOR SLOTS (Confirmed Working)
     # ---------------------------------------------------------
     if pattern_type == "slot":
         SLOT_L = 45.0
         SLOT_H = 8.5
-        PITCH_Y = 17.0     # Fixed Vertical Pitch
+        PITCH_Y = 17.0
         
-        # Rubber Band Logic: 8.5mm - 12.0mm
+        # Rubber band logic for slots
         best_gap = 8.5
         for test_gap in [x * 0.1 for x in range(85, 121)]:
             test_pitch = SLOT_L + test_gap
@@ -57,14 +57,11 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
             count = math.floor((sheet_length - 36 - SLOT_L - stagger) / test_pitch) + 1
             total_w = SLOT_L + (count - 1) * test_pitch + stagger
             margin = (sheet_length - total_w) / 2
-            
             if 18.0 <= margin <= 27.0:
                 best_gap = test_gap
                 break 
 
-        GAP_X = best_gap
-        PITCH_X = SLOT_L + GAP_X
-        
+        PITCH_X = SLOT_L + best_gap
         count_x = math.floor((sheet_length - 36 - SLOT_L - (PITCH_X/2)) / PITCH_X) + 1
         count_y = math.floor((sheet_width - 36 - SLOT_H) / PITCH_Y) + 1
         
@@ -73,21 +70,22 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         
         return {
             "pattern": "slot",
-            "is_grouped": False,
-            "count_x": count_x, "count_y": count_y,
+            "is_grouped": False, "count_x": count_x, "count_y": count_y,
             "pitch_x": PITCH_X, "pitch_y": PITCH_Y,
             "margin_x": (sheet_length - total_w) / 2,
             "margin_y": (sheet_width - total_h) / 2
         }
 
     # ---------------------------------------------------------
-    # 2. STANDARD LOGIC (For K, Q, O, Q+) - Reverted to Original
+    # 2. STANDARD LOGIC FROM YOUR SNIPPET (Diamonds/Squares)
     # ---------------------------------------------------------
     if pattern_type == "diamond":
+        # YOUR CODE LOGIC: item_size (10) is the SIDE. 
+        # So Pitch is calculated based on the DIAGONAL.
         pitch_x = (item_size + spacing) * math.sqrt(2)
         pitch_y = pitch_x / 2
         stagger_x = pitch_x / 2
-        bounding_size = item_size * math.sqrt(2)
+        bounding_size = item_size * math.sqrt(2) # ~14.14mm
     else:
         pitch_x = item_size + spacing
         pitch_y = item_size + spacing
@@ -98,14 +96,12 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
     if grouping:
         base_gap = grouping["gap_size"]
         best_col_count, best_margin = 8, 999
-        
         for c in range(8, 100):
             g_w = (c * item_size) + ((c - 1) * spacing)
             g_stride = g_w + base_gap
             n_g = max(1, math.floor((sheet_length + base_gap) / g_stride))
             pat_w = (n_g * g_w) + ((n_g - 1) * base_gap)
             margin = (sheet_length - pat_w) / 2
-            
             if 20 <= margin <= 50:
                 best_col_count, best_margin = c, margin
                 break
@@ -113,7 +109,6 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         g_w = (best_col_count * item_size) + ((best_col_count - 1) * spacing)
         n_g = max(1, math.floor((sheet_length + base_gap) / (g_w + base_gap)))
         total_w = (n_g * g_w) + ((n_g - 1) * base_gap)
-        
         count_y = optimize_tight_count(sheet_width, item_size, pitch_y)
         total_h = item_size + ((count_y - 1) * pitch_y)
         
@@ -153,41 +148,29 @@ async def generate_dxf(payload: dict = Body(...)):
     length, width = float(payload.get("length", 500)), float(payload.get("width", 300))
     bent_top = payload.get("bent_top", False)
 
-    # Base Sizes
     hole_w = cfg.get("slot_length", 35) if pattern == "slot" else cfg.get("hole_size", 10)
     hole_h = cfg.get("slot_width", 10) if pattern == "slot" else hole_w
 
-    # Calculate Layout
     layout = calculate_layout_params(length, width, hole_w, cfg["spacing"], pattern, cfg.get("grouping"))
 
     final_width = width + 5.1 if bent_top else width
 
-    # DXF Setup
     os.makedirs("output_dxf", exist_ok=True)
     filename = f"output_dxf/{customer}_{int(length)}x{final_width}.dxf"
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
-
-    # 🆕 FIXED: Rounded Rectangle Outline (5mm Radius)
+    
+    # 🆕 FIXED: 5mm Radius Outline
     R = 5.0
     L, W = length, final_width
     points = [
-        (R, 0, 0, 0, 0),          # Start (Bottom-Left Line end)
-        (L-R, 0, 0, 0, 1),        # Line to Bottom-Right Corner (Bulge 1 = 90 deg)
-        (L, R, 0, 0, 0),          # Arc to Bottom-Right Up
-        (L, W-R, 0, 0, 1),        # Line to Top-Right Corner
-        (L-R, W, 0, 0, 0),        # Arc to Top-Right Left
-        (R, W, 0, 0, 1),          # Line to Top-Left Corner
-        (0, W-R, 0, 0, 0),        # Arc to Top-Left Down
-        (0, R, 0, 0, 1),          # Line to Bottom-Left Corner
-        (R, 0, 0, 0, 0)           # Arc back to Start
+        (R, 0, 0, 0, 0), (L-R, 0, 0, 0, 1), (L, R, 0, 0, 0), (L, W-R, 0, 0, 1),
+        (L-R, W, 0, 0, 0), (R, W, 0, 0, 1), (0, W-R, 0, 0, 0), (0, R, 0, 0, 1), (R, 0, 0, 0, 0)
     ]
     msp.add_lwpolyline(points, format="xyseb", dxfattribs={"layer": "OUTLINE", "closed": True})
     
-    if "PATTERN" not in doc.layers:
-        doc.layers.new(name="PATTERN")
+    if "PATTERN" not in doc.layers: doc.layers.new(name="PATTERN")
 
-    # Drawing Loop
     y = layout["margin_y"]
     for row in range(layout["count_y"]):
         # Offset Logic
@@ -196,6 +179,7 @@ async def generate_dxf(payload: dict = Body(...)):
         else:
             row_off = (layout["pitch_x"] / 2) if cfg["offset"] == "half" and row % 2 != 0 else 0
         
+        # Drawing Logic
         if layout.get("is_grouped", False):
             for g in range(layout["num_groups"]):
                 g_start = layout["margin_x"] + (g * layout["group_stride"])
@@ -204,11 +188,9 @@ async def generate_dxf(payload: dict = Body(...)):
                     msp.add_lwpolyline([(x,y),(x+hole_w,y),(x+hole_w,y+hole_h),(x,y+hole_h),(x,y)], dxfattribs={"layer":"PATTERN"})
         else:
             x_start = layout["margin_x"] + row_off
-            
             # Stagger Safety for Slots
             current_count = layout["count_x"]
-            if pattern == "slot" and row_off > 0:
-                current_count -= 1
+            if pattern == "slot" and row_off > 0: current_count -= 1
                 
             for c in range(current_count):
                 x = x_start + (c * layout["pitch_x"])
@@ -223,8 +205,13 @@ async def generate_dxf(payload: dict = Body(...)):
                     msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
                     msp.add_arc((x+hole_w-r, y+r), r, 270, 90, dxfattribs={"layer":"PATTERN"})
                 elif pattern == "diamond":
-                    cx, cy = x + hole_w/2, y + hole_h/2
-                    msp.add_lwpolyline([(cx, y), (x+hole_w, cy), (cx, y+hole_h), (x, cy), (cx, y)], dxfattribs={"layer":"PATTERN"})
+                    # 💎 DIAMOND FIX: Scale width to diagonal (approx 14.14mm)
+                    # Because layout used Side=10 to calc Pitch, we must draw Diagonal=14.14
+                    diag_w = hole_w * math.sqrt(2) 
+                    diag_h = hole_h * math.sqrt(2)
+                    cx, cy = x + diag_w/2, y + diag_h/2
+                    # Draw relative to center
+                    msp.add_lwpolyline([(cx, y), (x+diag_w, cy), (cx, y+diag_h), (x, cy), (cx, y)], dxfattribs={"layer":"PATTERN"})
                 elif pattern == "circle":
                     r = hole_w / 2
                     msp.add_circle((x+r, y+r), r, dxfattribs={"layer":"PATTERN"})
