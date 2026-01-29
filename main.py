@@ -33,13 +33,13 @@ def solve_best_fit(available, item_w, min_gap, max_gap):
     """Searches for a gap that forces the margin into the 18-27mm range."""
     for gap in [x * 0.1 for x in range(int(min_gap*10), int(max_gap*10) + 1)]:
         pitch = item_w + gap
-        # Maximize count while respecting safety
+        # Calculate max count that leaves at least 18mm margin
         count = math.floor((available - 36 - item_w) / pitch) + 1
         visual_w = item_w + (count - 1) * pitch
         margin = (available - visual_w) / 2
         if 18.0 <= margin <= 27.0:
             return count, margin, gap
-    # Fallback to tightest fit
+    # Fallback if no perfect fit found in range
     p = item_w + min_gap
     c = math.floor((available - 36 - item_w) / p) + 1
     return c, (available - (item_w + (c-1)*p))/2, min_gap
@@ -59,21 +59,22 @@ async def generate_dxf(payload: dict = Body(...)):
     width = float(payload.get("width", 500))
     bent_top = payload.get("bent_top", False)
     
-    # 🆕 Dimensions strictly from your standards
+    # Precise standards for Slotted Holes
     hole_w = 40.0 if pattern == "slot" else 10.0
     hole_h = 8.5 if pattern == "slot" else 10.0
-    pitch_y = 25.0 if pattern == "slot" else 20.0
+    pitch_y = 25.0 if pattern == "slot" else 20.0 # Vertical distance between patterns
 
-    # 1. SOLVE FOR EVEN ROWS (The 'Master' layout)
-    count_even, margin_even, gap_x = solve_best_fit(length, hole_w, 8.5, 12.0)
+    # 1. SOLVE FOR HORIZONTAL (Row 0, 2, 4...)
+    count_even, margin_even, gap_x = solve_best_fit(length, hole_w, 8.5, 13.0)
     pitch_x = hole_w + gap_x
     
-    # 2. SOLVE FOR ODD ROWS (One fewer slot, centered)
+    # 2. SOLVE FOR STAGGERED (Row 1, 3, 5...)
+    # Center rows with one fewer slot independently
     count_odd = count_even - 1
     width_odd = hole_w + (count_odd - 1) * pitch_x
     margin_odd = (length - width_odd) / 2
 
-    # 3. SOLVE FOR Y-AXIS (Centered)
+    # 3. SOLVE FOR VERTICAL (Perfectly Centered)
     count_y = math.floor((width - 36 - hole_h) / pitch_y) + 1
     margin_y = (width - (hole_h + (count_y - 1) * pitch_y)) / 2
 
@@ -90,29 +91,27 @@ async def generate_dxf(payload: dict = Body(...)):
     # Draw Outline
     msp.add_lwpolyline([(0,0), (length,0), (length, final_width), (0, final_width), (0,0)], dxfattribs={"layer": "OUTLINE"})
 
-    # 4. DRAWING LOOP (Row-by-Row Centering)
+    # 4. DRAWING LOOP
     r = hole_h / 2
     for row in range(count_y):
-        y = margin_y + (row * pitch_y)
+        y_pos = margin_y + (row * pitch_y)
         
-        # Decide which row type we are drawing
+        # Select row centering logic
         if row % 2 == 0:
-            # Even Row (Standard)
             current_x = margin_even
             current_count = count_even
         else:
-            # Odd Row (Staggered - Center independently to maintain symmetry)
             current_x = margin_odd
             current_count = count_odd
 
         for c in range(current_count):
             x = current_x + (c * pitch_x)
             
-            # Draw Precise Slot
-            msp.add_line((x+r, y), (x+hole_w-r, y), dxfattribs={"layer":"PATTERN"})
-            msp.add_line((x+r, y+hole_h), (x+hole_w-r, y+hole_h), dxfattribs={"layer":"PATTERN"})
-            msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
-            msp.add_arc((x+hole_w-r, y+r), r, 270, 90, dxfattribs={"layer":"PATTERN"})
+            # Precise Slot Geometry
+            msp.add_line((x+r, y_pos), (x+hole_w-r, y_pos), dxfattribs={"layer":"PATTERN"})
+            msp.add_line((x+r, y_pos+hole_h), (x+hole_w-r, y_pos+hole_h), dxfattribs={"layer":"PATTERN"})
+            msp.add_arc((x+r, y_pos+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
+            msp.add_arc((x+hole_w-r, y_pos+r), r, 270, 90, dxfattribs={"layer":"PATTERN"})
 
     doc.saveas(filename)
     with open(filename, "rb") as f:
