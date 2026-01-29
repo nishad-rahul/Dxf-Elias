@@ -64,19 +64,35 @@ async def generate_dxf(payload: dict = Body(...)):
     hole_h = 8.5 if pattern == "slot" else 10.0
     pitch_y = 25.0 if pattern == "slot" else 20.0 # Vertical distance between patterns
 
-    # 1. SOLVE FOR HORIZONTAL (Row 0, 2, 4...)
-    count_even, margin_even, gap_x = solve_best_fit(length, hole_w, 8.5, 13.0)
-    pitch_x = hole_w + gap_x
-    
-    # 2. SOLVE FOR STAGGERED (Row 1, 3, 5...)
-    # Center rows with one fewer slot independently
-    count_odd = count_even - 1
-    width_odd = hole_w + (count_odd - 1) * pitch_x
-    margin_odd = (length - width_odd) / 2
-
-    # 3. SOLVE FOR VERTICAL (Perfectly Centered)
-    count_y = math.floor((width - 36 - hole_h) / pitch_y) + 1
-    margin_y = (width - (hole_h + (count_y - 1) * pitch_y)) / 2
+    # For slotted holes: Fixed 8.5mm spacing, no solver
+    if pattern == "slot":
+        gap_x = 8.5  # Fixed horizontal gap between slots
+        pitch_x = hole_w + gap_x  # 40 + 8.5 = 48.5mm center-to-center
+        
+        # Calculate count for even rows (0, 2, 4...)
+        count_even = math.floor((length - hole_w) / pitch_x) + 1
+        width_even = hole_w + (count_even - 1) * pitch_x
+        margin_even = (length - width_even) / 2
+        
+        # Calculate count for odd rows (1, 3, 5...) - staggered with one less
+        count_odd = count_even - 1
+        width_odd = hole_w + (count_odd - 1) * pitch_x
+        margin_odd = (length - width_odd) / 2
+        
+        # Vertical spacing - fixed 25mm between rows
+        count_y = math.floor((width - hole_h) / pitch_y) + 1
+        margin_y = (width - (hole_h + (count_y - 1) * pitch_y)) / 2
+    else:
+        # Use solver for other patterns to achieve 18-27mm margins
+        count_even, margin_even, gap_x = solve_best_fit(length, hole_w, 8.5, 13.0)
+        pitch_x = hole_w + gap_x
+        
+        count_odd = count_even - 1
+        width_odd = hole_w + (count_odd - 1) * pitch_x
+        margin_odd = (length - width_odd) / 2
+        
+        count_y = math.floor((width - 36 - hole_h) / pitch_y) + 1
+        margin_y = (width - (hole_h + (count_y - 1) * pitch_y)) / 2
 
     final_width = width + 5.1 if bent_top else width
 
@@ -91,27 +107,28 @@ async def generate_dxf(payload: dict = Body(...)):
     # Draw Outline
     msp.add_lwpolyline([(0,0), (length,0), (length, final_width), (0, final_width), (0,0)], dxfattribs={"layer": "OUTLINE"})
 
-    # 4. DRAWING LOOP
-    r = hole_h / 2
-    for row in range(count_y):
-        y_pos = margin_y + (row * pitch_y)
-        
-        # Select row centering logic
-        if row % 2 == 0:
-            current_x = margin_even
-            current_count = count_even
-        else:
-            current_x = margin_odd
-            current_count = count_odd
-
-        for c in range(current_count):
-            x = current_x + (c * pitch_x)
+    # 4. DRAWING LOOP - Only for slotted holes
+    if pattern == "slot":
+        r = hole_h / 2
+        for row in range(count_y):
+            y_pos = margin_y + (row * pitch_y)
             
-            # Precise Slot Geometry
-            msp.add_line((x+r, y_pos), (x+hole_w-r, y_pos), dxfattribs={"layer":"PATTERN"})
-            msp.add_line((x+r, y_pos+hole_h), (x+hole_w-r, y_pos+hole_h), dxfattribs={"layer":"PATTERN"})
-            msp.add_arc((x+r, y_pos+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
-            msp.add_arc((x+hole_w-r, y_pos+r), r, 270, 90, dxfattribs={"layer":"PATTERN"})
+            # Select row centering logic
+            if row % 2 == 0:
+                current_x = margin_even
+                current_count = count_even
+            else:
+                current_x = margin_odd
+                current_count = count_odd
+
+            for c in range(current_count):
+                x = current_x + (c * pitch_x)
+                
+                # Precise Slot Geometry (rounded ends)
+                msp.add_line((x+r, y_pos), (x+hole_w-r, y_pos), dxfattribs={"layer":"PATTERN"})
+                msp.add_line((x+r, y_pos+hole_h), (x+hole_w-r, y_pos+hole_h), dxfattribs={"layer":"PATTERN"})
+                msp.add_arc((x+r, y_pos+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
+                msp.add_arc((x+hole_w-r, y_pos+r), r, 270, 90, dxfattribs={"layer":"PATTERN"})
 
     doc.saveas(filename)
     with open(filename, "rb") as f:
