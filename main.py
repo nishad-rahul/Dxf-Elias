@@ -15,11 +15,11 @@ PATTERN_MAP = {
         "pattern": "square", "hole_size": 10, "spacing": 10, "offset": "none",
         "grouping": {"col_count": 8, "gap_size": 70.0}
     },
-    # EXACT PREVIOUS CONFIG FOR DIAMOND
+    # EXACT PREVIOUS CONFIG FOR DIAMOND (Strict 5.1mm spacing)
     "Check 10x10mm": {"pattern": "diamond", "hole_size": 10, "spacing": 5.1, "offset": "half"},
     "Round hole 10mm": {"pattern": "circle", "hole_diameter": 10, "spacing": 10, "offset": "half"},
     
-    # HERX CONFIG FOR SLOTS (Confirmed Working)
+    # HERX CONFIG FOR SLOTS
     "Slotted hole 35x10mm": {
         "pattern": "slot", 
         "slot_length": 45.0, 
@@ -30,7 +30,7 @@ PATTERN_MAP = {
 }
 
 # =========================================================
-# Helper: Optimized Count (From your provided code)
+# Helper: Optimized Count (Standard Logic)
 # =========================================================
 def optimize_tight_count(available_length, item_size, pitch, stagger_offset=0):
     max_c = math.floor((available_length - item_size - stagger_offset - 34) / pitch) + 1
@@ -42,14 +42,14 @@ def optimize_tight_count(available_length, item_size, pitch, stagger_offset=0):
 def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, pattern_type, grouping=None):
 
     # ---------------------------------------------------------
-    # 1. SPECIAL HERX LOGIC FOR SLOTS (Confirmed Working)
+    # 1. SPECIAL HERX LOGIC FOR SLOTS
     # ---------------------------------------------------------
     if pattern_type == "slot":
         SLOT_L = 45.0
         SLOT_H = 8.5
         PITCH_Y = 17.0
         
-        # Rubber band logic for slots
+        # Rubber band logic
         best_gap = 8.5
         for test_gap in [x * 0.1 for x in range(85, 121)]:
             test_pitch = SLOT_L + test_gap
@@ -77,15 +77,14 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         }
 
     # ---------------------------------------------------------
-    # 2. STANDARD LOGIC FROM YOUR SNIPPET (Diamonds/Squares)
+    # 2. STANDARD LOGIC (Diamonds/Squares)
     # ---------------------------------------------------------
     if pattern_type == "diamond":
-        # YOUR CODE LOGIC: item_size (10) is the SIDE. 
-        # So Pitch is calculated based on the DIAGONAL.
+        # Pitch calculated on DIAGONAL based on SIDE spacing
         pitch_x = (item_size + spacing) * math.sqrt(2)
         pitch_y = pitch_x / 2
         stagger_x = pitch_x / 2
-        bounding_size = item_size * math.sqrt(2) # ~14.14mm
+        bounding_size = item_size * math.sqrt(2) 
     else:
         pitch_x = item_size + spacing
         pitch_y = item_size + spacing
@@ -160,12 +159,21 @@ async def generate_dxf(payload: dict = Body(...)):
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
     
-    # 🆕 FIXED: 5mm Radius Outline
+    # 🆕 CORRECTED OUTLINE: 5mm Radius with Perfect 0.4142 Bulge
     R = 5.0
     L, W = length, final_width
+    # Bulge for 90-degree arc = tan(22.5 deg) = 0.41421356
+    BULGE = 0.41421356
+    
     points = [
-        (R, 0, 0, 0, 0), (L-R, 0, 0, 0, 1), (L, R, 0, 0, 0), (L, W-R, 0, 0, 1),
-        (L-R, W, 0, 0, 0), (R, W, 0, 0, 1), (0, W-R, 0, 0, 0), (0, R, 0, 0, 1), (R, 0, 0, 0, 0)
+        (L-R, 0, 0, 0, BULGE),    # Start at bottom-right straight, bulge into corner
+        (L, R, 0, 0, 0),          # End of BR corner, straight up
+        (L, W-R, 0, 0, BULGE),    # Start of TR corner, bulge into corner
+        (L-R, W, 0, 0, 0),        # End of TR corner, straight left
+        (R, W, 0, 0, BULGE),      # Start of TL corner, bulge into corner
+        (0, W-R, 0, 0, 0),        # End of TL corner, straight down
+        (0, R, 0, 0, BULGE),      # Start of BL corner, bulge into corner
+        (R, 0, 0, 0, 0)           # End of BL corner, straight right (closes loop)
     ]
     msp.add_lwpolyline(points, format="xyseb", dxfattribs={"layer": "OUTLINE", "closed": True})
     
@@ -205,12 +213,10 @@ async def generate_dxf(payload: dict = Body(...)):
                     msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
                     msp.add_arc((x+hole_w-r, y+r), r, 270, 90, dxfattribs={"layer":"PATTERN"})
                 elif pattern == "diamond":
-                    # 💎 DIAMOND FIX: Scale width to diagonal (approx 14.14mm)
-                    # Because layout used Side=10 to calc Pitch, we must draw Diagonal=14.14
+                    # Correct Diagonal drawing
                     diag_w = hole_w * math.sqrt(2) 
                     diag_h = hole_h * math.sqrt(2)
                     cx, cy = x + diag_w/2, y + diag_h/2
-                    # Draw relative to center
                     msp.add_lwpolyline([(cx, y), (x+diag_w, cy), (cx, y+diag_h), (x, cy), (cx, y)], dxfattribs={"layer":"PATTERN"})
                 elif pattern == "circle":
                     r = hole_w / 2
