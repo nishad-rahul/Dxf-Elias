@@ -162,8 +162,8 @@ async def generate_dxf(payload: dict = Body(...)):
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
     
-    # 🆕 CORRECTED OUTLINE: 5mm Radius with 0.4142 Bulge (Perfect 90 deg arc)
-    R = 5.0
+    # 🆕 CORRECTED OUTLINE: 3mm Radius with Perfect 0.4142 Bulge
+    R = 3.0  # CHANGED FROM 5.0 TO 3.0
     L, W = length, final_width
     BULGE = 0.41421356 # tan(22.5) for 90 degree arc
     points = [
@@ -191,9 +191,9 @@ async def generate_dxf(payload: dict = Body(...)):
         else:
             x_start = layout["margin_x"] + row_off
             
-            # 🆕 SYMMETRY FIX: Reduce count by 1 for Odd (Staggered) rows in Slots
+            # 🆕 SYMMETRY FIX: Reduce count by 1 for Odd (Staggered) rows in Slots AND Diamonds
             current_count = layout["count_x"]
-            if pattern == "slot" and row_off > 0:
+            if (pattern == "slot" or pattern == "diamond") and row_off > 0:
                 current_count -= 1
                 
             for c in range(current_count):
