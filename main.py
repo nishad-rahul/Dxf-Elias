@@ -15,11 +15,11 @@ PATTERN_MAP = {
         "pattern": "square", "hole_size": 10, "spacing": 10, "offset": "none",
         "grouping": {"col_count": 8, "gap_size": 70.0}
     },
-    # DIAMOND: Fixed 5.1mm spacing (Classic Logic)
+    # DIAMOND: Fixed 5.1mm spacing
     "Check 10x10mm": {"pattern": "diamond", "hole_size": 10, "spacing": 5.1, "offset": "half"},
     "Round hole 10mm": {"pattern": "circle", "hole_diameter": 10, "spacing": 10, "offset": "half"},
     
-    # SLOTS: Herx Dimensions (Approved)
+    # SLOTS: Herx Dimensions
     "Slotted hole 35x10mm": {
         "pattern": "slot", 
         "slot_length": 45.0, 
@@ -33,7 +33,11 @@ PATTERN_MAP = {
 # Helper: Optimized Count
 # =========================================================
 def optimize_tight_count(available_length, item_size, pitch, stagger_offset=0):
-    max_c = math.floor((available_length - item_size - stagger_offset - 34) / pitch) + 1
+    # Calculate how many fit. 
+    # Note: We do NOT subtract stagger_offset here because we handle the 
+    # "minus one" logic in the drawing loop for symmetry.
+    # We calculate based on the WIDEST row (Even row).
+    max_c = math.floor((available_length - item_size - 34) / pitch) + 1
     return max(1, max_c)
 
 # =========================================================
@@ -54,7 +58,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         for test_gap in [x * 0.1 for x in range(85, 121)]:
             test_pitch = SLOT_L + test_gap
             
-            # Calculate based on the EVEN row (the widest one)
+            # Count based on EVEN row (Widest)
             count = math.floor((sheet_length - 36 - SLOT_L) / test_pitch) + 1
             total_w = SLOT_L + (count - 1) * test_pitch
             margin = (sheet_length - total_w) / 2
@@ -121,11 +125,13 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
             "margin_x": (sheet_length - total_w) / 2, "margin_y": (sheet_width - total_h) / 2, "count_y": count_y
         }
 
-    count_x = optimize_tight_count(sheet_length, bounding_size, pitch_x, stagger_x)
+    # Calculate Count based on the EVEN ROW (No Stagger)
+    # The staggered row will simply have Count - 1
+    count_x = optimize_tight_count(sheet_length, bounding_size, pitch_x, 0)
     item_h = bounding_size
     count_y = optimize_tight_count(sheet_width, item_h, pitch_y)
 
-    total_w = bounding_size + ((count_x - 1) * pitch_x) + stagger_x
+    total_w = bounding_size + ((count_x - 1) * pitch_x)
     total_h = item_h + ((count_y - 1) * pitch_y)
 
     return {
@@ -163,7 +169,7 @@ async def generate_dxf(payload: dict = Body(...)):
     msp = doc.modelspace()
     
     # 🆕 CORRECTED OUTLINE: 3mm Radius with Perfect 0.4142 Bulge
-    R = 3.0  # CHANGED FROM 5.0 TO 3.0
+    R = 3.0  
     L, W = length, final_width
     BULGE = 0.41421356 # tan(22.5) for 90 degree arc
     points = [
@@ -192,8 +198,9 @@ async def generate_dxf(payload: dict = Body(...)):
             x_start = layout["margin_x"] + row_off
             
             # 🆕 SYMMETRY FIX: Reduce count by 1 for Odd (Staggered) rows in Slots AND Diamonds
+            # This creates the "Triangle Edge" look from the freelancer drawing
             current_count = layout["count_x"]
-            if (pattern == "slot" or pattern == "diamond") and row_off > 0:
+            if row_off > 0:
                 current_count -= 1
                 
             for c in range(current_count):
@@ -209,7 +216,8 @@ async def generate_dxf(payload: dict = Body(...)):
                     msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
                     msp.add_arc((x+hole_w-r, y+r), r, 270, 90, dxfattribs={"layer":"PATTERN"})
                 elif pattern == "diamond":
-                    # CORRECT DIAMOND SIZING (Diagonal drawing)
+                    # CORRECT DIAMOND SIZING
+                    # Calculate diagonal size from side length (hole_w)
                     diag_w = hole_w * math.sqrt(2) 
                     diag_h = hole_h * math.sqrt(2)
                     cx, cy = x + diag_w/2, y + diag_h/2
