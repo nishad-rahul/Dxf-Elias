@@ -30,13 +30,16 @@ PATTERN_MAP = {
 }
 
 # =========================================================
-# Helper: Optimized Count
+# Helper: Optimized Odd Count
 # =========================================================
-def optimize_tight_count(available_length, item_size, pitch, stagger_offset=0):
-    # Calculate Max Count based on the WIDEST row (Offset = 0)
-    # We remove stagger_offset here because we handle the "Minus 1" logic 
-    # explicitly in the drawing loop.
+def optimize_odd_count(available_length, item_size, pitch, stagger_offset=0):
+    # Calculate max possible count
     max_c = math.floor((available_length - item_size - stagger_offset - 34) / pitch) + 1
+    
+    # FORCE ODD NUMBER for Symmetry (Center-Out Alignment)
+    if max_c % 2 == 0:
+        max_c -= 1
+        
     return max(1, max_c)
 
 # =========================================================
@@ -45,7 +48,7 @@ def optimize_tight_count(available_length, item_size, pitch, stagger_offset=0):
 def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, pattern_type, grouping=None):
 
     # ---------------------------------------------------------
-    # 1. LONG SLOTHOLE (Muster L) - Symmetry Fix
+    # 1. LONG SLOTHOLE (Muster L)
     # ---------------------------------------------------------
     if pattern_type == "slot":
         SLOT_L = 45.0
@@ -57,9 +60,12 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         for test_gap in [x * 0.1 for x in range(85, 121)]:
             test_pitch = SLOT_L + test_gap
             
-            # Count based on MAIN ROW (Widest)
-            count = math.floor((sheet_length - 36 - SLOT_L) / test_pitch) + 1
-            total_w = SLOT_L + (count - 1) * test_pitch
+            # Check if ODD count fits well
+            # We calculate pure max, then check odd margin
+            raw_count = math.floor((sheet_length - 36 - SLOT_L) / test_pitch) + 1
+            odd_count = raw_count if raw_count % 2 != 0 else raw_count - 1
+            
+            total_w = SLOT_L + (odd_count - 1) * test_pitch
             margin = (sheet_length - total_w) / 2
             
             if 18.0 <= margin <= 27.0:
@@ -68,11 +74,14 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
 
         PITCH_X = SLOT_L + best_gap
         
-        # Final Calculations
-        count_x = math.floor((sheet_length - 36 - SLOT_L) / PITCH_X) + 1
-        count_y = math.floor((sheet_width - 36 - SLOT_H) / PITCH_Y) + 1
+        # Calculate ODD Counts
+        raw_count_x = math.floor((sheet_length - 36 - SLOT_L) / PITCH_X) + 1
+        count_x = raw_count_x if raw_count_x % 2 != 0 else raw_count_x - 1
         
-        # Center grid based on MAIN ROW
+        raw_count_y = math.floor((sheet_width - 36 - SLOT_H) / PITCH_Y) + 1
+        count_y = raw_count_y if raw_count_y % 2 != 0 else raw_count_y - 1
+        
+        # Center grid based on MAIN ROW (Odd Count)
         total_w = SLOT_L + (count_x - 1) * PITCH_X
         total_h = SLOT_H + (count_y - 1) * PITCH_Y
         
@@ -88,7 +97,6 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
     # 2. STANDARD LOGIC (Diamond, Square, Circle)
     # ---------------------------------------------------------
     if pattern_type == "diamond":
-        # Pitch calculated on Diagonal
         pitch_x = (item_size + spacing) * math.sqrt(2)
         pitch_y = pitch_x / 2
         stagger_x = pitch_x / 2
@@ -100,6 +108,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         bounding_size = item_size
 
     if grouping:
+        # Grouping logic usually overrides standard symmetry, kept as is but centered
         base_gap = grouping["gap_size"]
         best_col_count, best_margin = 8, 999
         for c in range(8, 100):
@@ -115,7 +124,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         g_w = (best_col_count * item_size) + ((best_col_count - 1) * spacing)
         n_g = max(1, math.floor((sheet_length + base_gap) / (g_w + base_gap)))
         total_w = (n_g * g_w) + ((n_g - 1) * base_gap)
-        count_y = optimize_tight_count(sheet_width, item_size, pitch_y)
+        count_y = optimize_odd_count(sheet_width, item_size, pitch_y)
         total_h = item_size + ((count_y - 1) * pitch_y)
         
         return {
@@ -124,10 +133,10 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
             "margin_x": (sheet_length - total_w) / 2, "margin_y": (sheet_width - total_h) / 2, "count_y": count_y
         }
 
-    # Standard Count based on MAIN ROW (Offset 0)
-    count_x = optimize_tight_count(sheet_length, bounding_size, pitch_x, 0)
+    # Standard Count - FORCED ODD
+    count_x = optimize_odd_count(sheet_length, bounding_size, pitch_x, 0)
     item_h = bounding_size
-    count_y = optimize_tight_count(sheet_width, item_h, pitch_y)
+    count_y = optimize_odd_count(sheet_width, item_h, pitch_y)
 
     total_w = bounding_size + ((count_x - 1) * pitch_x)
     total_h = item_h + ((count_y - 1) * pitch_y)
@@ -195,8 +204,10 @@ async def generate_dxf(payload: dict = Body(...)):
         else:
             x_start = layout["margin_x"] + row_off
             
-            # 🆕 SYMMETRY FIX: Reduce count by 1 for Odd (Staggered) rows in Slots AND Diamonds
-            # "Last second column" logic: Stop loop at N-1
+            # 🆕 CENTER-OUT SYMMETRY:
+            # We forced count_x to be ODD.
+            # Main Row (row_off == 0): Count = N (Odd)
+            # Staggered Row (row_off > 0): Count = N - 1 (Even)
             current_count = layout["count_x"]
             if (pattern == "slot" or pattern == "diamond") and row_off > 0:
                 current_count -= 1
@@ -214,7 +225,6 @@ async def generate_dxf(payload: dict = Body(...)):
                     msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
                     msp.add_arc((x+hole_w-r, y+r), r, 270, 90, dxfattribs={"layer":"PATTERN"})
                 elif pattern == "diamond":
-                    # CORRECT DIAMOND SIZING
                     diag_w = hole_w * math.sqrt(2) 
                     diag_h = hole_h * math.sqrt(2)
                     cx, cy = x + diag_w/2, y + diag_h/2
