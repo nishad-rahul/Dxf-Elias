@@ -10,16 +10,22 @@ app = FastAPI()
 # Pattern Configuration
 # =========================================================
 PATTERN_MAP = {
+    # ⬜ SQUARES (Staggered): Now symmetrical!
     "Squares 10x10mm": {"pattern": "square", "hole_size": 10, "spacing": 10, "offset": "half"},
+    
+    # ▦ SQUARES (Grouped): Standard Grid (Centered)
     "Squares Grouped": {
         "pattern": "square", "hole_size": 10, "spacing": 10, "offset": "none",
         "grouping": {"col_count": 8, "gap_size": 70.0}
     },
-    # DIAMOND: Fixed 5.1mm spacing
+    
+    # 💎 DIAMOND: Fixed 5.1mm spacing (Symmetrical)
     "Check 10x10mm": {"pattern": "diamond", "hole_size": 10, "spacing": 5.1, "offset": "half"},
+    
+    # ⚪ ROUND: Circles (Symmetrical)
     "Round hole 10mm": {"pattern": "circle", "hole_diameter": 10, "spacing": 10, "offset": "half"},
     
-    # SLOTS: Herx Dimensions
+    # ▬ SLOTS: Herx Dimensions (Symmetrical)
     "Slotted hole 35x10mm": {
         "pattern": "slot", 
         "slot_length": 45.0, 
@@ -30,13 +36,13 @@ PATTERN_MAP = {
 }
 
 # =========================================================
-# Helper: Optimized Odd Count
+# Helper: Optimized Odd Count (Universal)
 # =========================================================
 def optimize_odd_count(available_length, item_size, pitch, stagger_offset=0):
     # Calculate max possible count
     max_c = math.floor((available_length - item_size - stagger_offset - 34) / pitch) + 1
     
-    # FORCE ODD NUMBER for Symmetry (Center-Out Alignment)
+    # FORCE ODD NUMBER for Center-Out Symmetry
     if max_c % 2 == 0:
         max_c -= 1
         
@@ -55,13 +61,12 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         SLOT_H = 8.5
         PITCH_Y = 17.0
         
-        # Rubber band logic (8.5mm to 12.0mm gap)
+        # Rubber band logic
         best_gap = 8.5
         for test_gap in [x * 0.1 for x in range(85, 121)]:
             test_pitch = SLOT_L + test_gap
             
-            # Check if ODD count fits well
-            # We calculate pure max, then check odd margin
+            # Check ODD count fit
             raw_count = math.floor((sheet_length - 36 - SLOT_L) / test_pitch) + 1
             odd_count = raw_count if raw_count % 2 != 0 else raw_count - 1
             
@@ -108,7 +113,6 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         bounding_size = item_size
 
     if grouping:
-        # Grouping logic usually overrides standard symmetry, kept as is but centered
         base_gap = grouping["gap_size"]
         best_col_count, best_margin = 8, 999
         for c in range(8, 100):
@@ -204,12 +208,10 @@ async def generate_dxf(payload: dict = Body(...)):
         else:
             x_start = layout["margin_x"] + row_off
             
-            # 🆕 CENTER-OUT SYMMETRY:
-            # We forced count_x to be ODD.
-            # Main Row (row_off == 0): Count = N (Odd)
-            # Staggered Row (row_off > 0): Count = N - 1 (Even)
+            # 🆕 UNIVERSAL SYMMETRY FIX:
+            # Applies "Minus One" rule to ANY pattern with a stagger (Offset > 0)
             current_count = layout["count_x"]
-            if (pattern == "slot" or pattern == "diamond") and row_off > 0:
+            if row_off > 0:
                 current_count -= 1
                 
             for c in range(current_count):
