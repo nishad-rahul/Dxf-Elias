@@ -33,7 +33,9 @@ PATTERN_MAP = {
 # Helper: Optimized Count
 # =========================================================
 def optimize_tight_count(available_length, item_size, pitch, stagger_offset=0):
-    # Calculate Max Count based on the WIDEST row (Main Row)
+    # Calculate Max Count based on the WIDEST row (Offset = 0)
+    # We remove stagger_offset here because we handle the "Minus 1" logic 
+    # explicitly in the drawing loop.
     max_c = math.floor((available_length - item_size - stagger_offset - 34) / pitch) + 1
     return max(1, max_c)
 
@@ -43,7 +45,7 @@ def optimize_tight_count(available_length, item_size, pitch, stagger_offset=0):
 def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, pattern_type, grouping=None):
 
     # ---------------------------------------------------------
-    # 1. LONG SLOTHOLE (Muster L)
+    # 1. LONG SLOTHOLE (Muster L) - Symmetry Fix
     # ---------------------------------------------------------
     if pattern_type == "slot":
         SLOT_L = 45.0
@@ -86,6 +88,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
     # 2. STANDARD LOGIC (Diamond, Square, Circle)
     # ---------------------------------------------------------
     if pattern_type == "diamond":
+        # Pitch calculated on Diagonal
         pitch_x = (item_size + spacing) * math.sqrt(2)
         pitch_y = pitch_x / 2
         stagger_x = pitch_x / 2
@@ -121,12 +124,12 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
             "margin_x": (sheet_length - total_w) / 2, "margin_y": (sheet_width - total_h) / 2, "count_y": count_y
         }
 
-    # Standard Count
-    count_x = optimize_tight_count(sheet_length, bounding_size, pitch_x, stagger_x)
+    # Standard Count based on MAIN ROW (Offset 0)
+    count_x = optimize_tight_count(sheet_length, bounding_size, pitch_x, 0)
     item_h = bounding_size
     count_y = optimize_tight_count(sheet_width, item_h, pitch_y)
 
-    total_w = bounding_size + ((count_x - 1) * pitch_x) + stagger_x
+    total_w = bounding_size + ((count_x - 1) * pitch_x)
     total_h = item_h + ((count_y - 1) * pitch_y)
 
     return {
@@ -163,10 +166,10 @@ async def generate_dxf(payload: dict = Body(...)):
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
     
-    # 3mm Radius with Perfect 0.4142 Bulge
+    # 🆕 CORRECTED OUTLINE: 3mm Radius with Perfect 0.4142 Bulge
     R = 3.0
     L, W = length, final_width
-    BULGE = 0.41421356 
+    BULGE = 0.41421356 # tan(22.5) for 90 degree arc
     points = [
         (L-R, 0, 0, 0, BULGE), (L, R, 0, 0, 0), (L, W-R, 0, 0, BULGE), (L-R, W, 0, 0, 0),
         (R, W, 0, 0, BULGE), (0, W-R, 0, 0, 0), (0, R, 0, 0, BULGE), (R, 0, 0, 0, 0)
@@ -192,9 +195,8 @@ async def generate_dxf(payload: dict = Body(...)):
         else:
             x_start = layout["margin_x"] + row_off
             
-            # SYMMETRY LOGIC: 
-            # If row is staggered (row_off > 0), reduce count by 1.
-            # This creates the "Triangle" edge: Main Row=N, Stagger Row=N-1
+            # 🆕 SYMMETRY FIX: Reduce count by 1 for Odd (Staggered) rows in Slots AND Diamonds
+            # "Last second column" logic: Stop loop at N-1
             current_count = layout["count_x"]
             if (pattern == "slot" or pattern == "diamond") and row_off > 0:
                 current_count -= 1
@@ -212,6 +214,7 @@ async def generate_dxf(payload: dict = Body(...)):
                     msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
                     msp.add_arc((x+hole_w-r, y+r), r, 270, 90, dxfattribs={"layer":"PATTERN"})
                 elif pattern == "diamond":
+                    # CORRECT DIAMOND SIZING
                     diag_w = hole_w * math.sqrt(2) 
                     diag_h = hole_h * math.sqrt(2)
                     cx, cy = x + diag_w/2, y + diag_h/2
