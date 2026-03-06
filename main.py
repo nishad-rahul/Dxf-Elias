@@ -13,10 +13,14 @@ PATTERN_MAP = {
     # ⬜ SQUARES (Staggered): Now symmetrical!
     "Squares 10x10mm": {"pattern": "square", "hole_size": 10, "spacing": 10, "offset": "half"},
     
-    # ▦ SQUARES (Grouped): Standard Grid (Centered)
+    # ▦ SQUARES (Grouped): UPDATED TO OPTION B LOGIC
     "Squares Grouped": {
         "pattern": "square", "hole_size": 10, "spacing": 10, "offset": "none",
-        "grouping": {"col_count": 8, "gap_size": 70.0}
+        "grouping": {
+            "base_col_count": 8, 
+            "gap_range": [60.0, 75.0], 
+            "max_margin": 35.0
+        }
     },
     
     # 💎 DIAMOND: Fixed 5.1mm spacing (Symmetrical)
@@ -112,28 +116,56 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         stagger_x = (pitch_x / 2)
         bounding_size = item_size
 
+    # ---------------------------------------------------------
+    # 3. GROUPED SQUARES (Q+) - NEW OPTION B LOGIC
+    # ---------------------------------------------------------
     if grouping:
-        base_gap = grouping["gap_size"]
-        best_col_count, best_margin = 8, 999
-        for c in range(8, 100):
-            g_w = (c * item_size) + ((c - 1) * spacing)
-            g_stride = g_w + base_gap
-            n_g = max(1, math.floor((sheet_length + base_gap) / g_stride))
-            pat_w = (n_g * g_w) + ((n_g - 1) * base_gap)
-            margin = (sheet_length - pat_w) / 2
-            if 20 <= margin <= 50:
-                best_col_count, best_margin = c, margin
-                break
+        base_col = grouping.get("base_col_count", 8)
+        min_gap, max_gap = grouping.get("gap_range", [60.0, 75.0])
+        max_margin = grouping.get("max_margin", 35.0)
         
-        g_w = (best_col_count * item_size) + ((best_col_count - 1) * spacing)
-        n_g = max(1, math.floor((sheet_length + base_gap) / (g_w + base_gap)))
-        total_w = (n_g * g_w) + ((n_g - 1) * base_gap)
+        best_c = base_col
+        best_gap = min_gap
+        best_ng = 1
+        best_margin_val = 9999
+        found_perfect = False
+        
+        # Option B: Iterate columns starting from base_col, dynamically expanding if needed
+        for c in range(base_col, 100): 
+            gw = (c * item_size) + ((c - 1) * spacing)
+            
+            # Stretch the gap (60.0 to 75.0)
+            for gap_int in range(int(min_gap * 10), int(max_gap * 10) + 1):
+                test_gap = gap_int / 10.0
+                stride = gw + test_gap
+                
+                ng = max(1, math.floor((sheet_length + test_gap) / stride))
+                total_w = (ng * gw) + ((ng - 1) * test_gap)
+                margin = (sheet_length - total_w) / 2
+                
+                # We want the margin to be positive but as small as possible, targeting <= max_margin
+                if 0 <= margin < best_margin_val:
+                    best_c = c
+                    best_gap = test_gap
+                    best_ng = ng
+                    best_margin_val = margin
+                
+                if 0 <= margin <= max_margin:
+                    found_perfect = True
+                    break 
+            
+            if found_perfect:
+                break 
+                
+        # Final Dimensions for Grouping
+        g_w = (best_c * item_size) + ((best_c - 1) * spacing)
+        total_w = (best_ng * g_w) + ((best_ng - 1) * best_gap)
         count_y = optimize_odd_count(sheet_width, item_size, pitch_y)
         total_h = item_size + ((count_y - 1) * pitch_y)
         
         return {
-            "is_grouped": True, "num_groups": n_g, "cols_per_group": best_col_count,
-            "group_stride": g_w + base_gap, "pitch_x": pitch_x, "pitch_y": pitch_y,
+            "is_grouped": True, "num_groups": best_ng, "cols_per_group": best_c,
+            "group_stride": g_w + best_gap, "pitch_x": pitch_x, "pitch_y": pitch_y,
             "margin_x": (sheet_length - total_w) / 2, "margin_y": (sheet_width - total_h) / 2, "count_y": count_y
         }
 
