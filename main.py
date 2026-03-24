@@ -20,7 +20,7 @@ PATTERN_MAP = {
     
     "Slotted hole 35x10mm": {
         "pattern": "slot", 
-        "slot_length": 29.9, # Updated config just for reference, math hardcodes it below
+        "slot_length": 29.9, # Hardcoded in math below, listed here for reference
         "slot_width": 8.5, 
         "spacing": 8.5, 
         "offset": "half"
@@ -86,19 +86,21 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                 
         PITCH_X = SLOT_L + best_gap_x
         
-        # 3. Y-AXIS: Vertical pattern-to-pattern gap strictly 24.0mm to 25.0mm
+        # 3. Y-AXIS: Same-column vertical gap strictly 24.0mm to 25.0mm
+        # Because slots are staggered, vertically aligned slots are 2 rows apart.
+        # Math: 2 * RowPitch = SlotHeight + VerticalGap
         best_gap_y = 24.5
         best_cy = 1
         best_my = 0
         best_dist_y = 9999
         
         for test_gap in [x * 0.1 for x in range(240, 251)]: 
-            test_pitch = SLOT_H + test_gap
-            cy = math.floor((sheet_width - SLOT_H) / test_pitch) + 1
+            test_pitch_y = (SLOT_H + test_gap) / 2.0
+            cy = math.floor((sheet_width - SLOT_H) / test_pitch_y) + 1
             if cy % 2 == 0: cy -= 1
             cy = max(1, cy)
             
-            my = (sheet_width - (SLOT_H + (cy - 1) * test_pitch)) / 2
+            my = (sheet_width - (SLOT_H + (cy - 1) * test_pitch_y)) / 2
             dist = abs(my - 21.0)
             if dist < best_dist_y:
                 best_dist_y = dist
@@ -106,7 +108,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                 best_cy = cy
                 best_my = my
                 
-        PITCH_Y = SLOT_H + best_gap_y
+        PITCH_Y = (SLOT_H + best_gap_y) / 2.0
         
         # 4. EMERGENCY RULE: Rubber band ONLY if margin delta exceeds 10mm
         if abs(best_mx - best_my) > 10.0:
@@ -234,7 +236,7 @@ async def generate_dxf(payload: dict = Body(...)):
     
     if "PATTERN" not in doc.layers: doc.layers.new(name="PATTERN")
 
-    # 🆕 Slot Length Override specifically for the drawing loop
+    # Slot Length Override specifically for the drawing loop
     draw_hole_w = 29.9 if pattern == "slot" else hole_w
     
     y = layout["margin_y"]
