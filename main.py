@@ -17,8 +17,13 @@ PATTERN_MAP = {
     },
     "Check 10x10mm": {"pattern": "diamond", "hole_size": 10, "spacing": 5.1, "offset": "half"},
     "Round hole 10mm": {"pattern": "circle", "hole_diameter": 10, "spacing": 10, "offset": "half"},
+    
     "Slotted hole 35x10mm": {
-        "pattern": "slot", "slot_length": 45.0, "slot_width": 8.5, "spacing": 8.5, "offset": "half"
+        "pattern": "slot", 
+        "slot_length": 29.9, # Updated config just for reference, math hardcodes it below
+        "slot_width": 8.5, 
+        "spacing": 8.5, 
+        "offset": "half"
     },
 }
 
@@ -26,10 +31,6 @@ PATTERN_MAP = {
 # Helper: Natural Layout Finder (Targeting 16-26mm)
 # =========================================================
 def get_natural_layout(available_length, item_size, pitch, min_m=16.0, max_m=26.0):
-    """
-    Finds the Odd Count that naturally places the margin closest 
-    to the target range WITHOUT altering the pitch.
-    """
     max_c = math.floor((available_length - item_size) / pitch) + 1
     if max_c % 2 == 0: 
         max_c -= 1
@@ -40,12 +41,9 @@ def get_natural_layout(available_length, item_size, pitch, min_m=16.0, max_m=26.
     
     target_mid = (min_m + max_m) / 2.0
     
-    # Check max count and the next few odd counts down
     for c in range(max_c, 0, -2):
         margin = (available_length - (item_size + (c - 1) * pitch)) / 2
         dist = abs(margin - target_mid)
-        
-        # Lock in the count that gets us closest to ~21mm naturally
         if dist < best_dist:
             best_dist = dist
             best_c = c
@@ -59,52 +57,72 @@ def get_natural_layout(available_length, item_size, pitch, min_m=16.0, max_m=26.
 def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, pattern_type, grouping=None):
 
     # ---------------------------------------------------------
-    # 1. LONG SLOTHOLE (Muster L)
+    # 1. LONG SLOTHOLE (Muster L) - ISOLATED FIX
     # ---------------------------------------------------------
     if pattern_type == "slot":
-        SLOT_L = 45.0
-        SLOT_H = 8.5
-        PITCH_Y = 17.0
+        # 1. HARDCODED SLOT SIZE
+        SLOT_L = 29.9 
+        SLOT_H = cfg.get("slot_width", 8.5)
         
-        # Get natural Y using rigid 17.0mm pitch
-        c_y, m_y = get_natural_layout(sheet_width, SLOT_H, PITCH_Y)
-        
-        # Find X using allowable standard gaps (8.5 - 12.0)
-        best_gap = 8.5
+        # 2. X-AXIS: Horizontal gap strictly 7.0mm to 8.0mm
+        best_gap_x = 7.5
         best_cx = 1
         best_mx = 0
-        best_dist = 9999
+        best_dist_x = 9999
         
-        for test_gap in [x * 0.1 for x in range(85, 121)]:
+        for test_gap in [x * 0.1 for x in range(70, 81)]: 
             test_pitch = SLOT_L + test_gap
             cx = math.floor((sheet_length - SLOT_L) / test_pitch) + 1
             if cx % 2 == 0: cx -= 1
             cx = max(1, cx)
             
             mx = (sheet_length - (SLOT_L + (cx - 1) * test_pitch)) / 2
-            dist = abs(mx - m_y) # Try to match X to Y naturally
-            
-            if dist < best_dist:
-                best_dist = dist
-                best_gap = test_gap
+            dist = abs(mx - 21.0) # Target the middle of 16-26mm
+            if dist < best_dist_x:
+                best_dist_x = dist
+                best_gap_x = test_gap
                 best_cx = cx
                 best_mx = mx
                 
-        PITCH_X = SLOT_L + best_gap
+        PITCH_X = SLOT_L + best_gap_x
         
-        # EMERGENCY RULE: Only rubber band if delta > 10mm
-        if abs(best_mx - m_y) > 10.0:
-            m_y = best_mx
-            if c_y > 1: PITCH_Y = (sheet_width - 2*m_y - SLOT_H) / (c_y - 1)
+        # 3. Y-AXIS: Vertical pattern-to-pattern gap strictly 24.0mm to 25.0mm
+        best_gap_y = 24.5
+        best_cy = 1
+        best_my = 0
+        best_dist_y = 9999
+        
+        for test_gap in [x * 0.1 for x in range(240, 251)]: 
+            test_pitch = SLOT_H + test_gap
+            cy = math.floor((sheet_width - SLOT_H) / test_pitch) + 1
+            if cy % 2 == 0: cy -= 1
+            cy = max(1, cy)
+            
+            my = (sheet_width - (SLOT_H + (cy - 1) * test_pitch)) / 2
+            dist = abs(my - 21.0)
+            if dist < best_dist_y:
+                best_dist_y = dist
+                best_gap_y = test_gap
+                best_cy = cy
+                best_my = my
+                
+        PITCH_Y = SLOT_H + best_gap_y
+        
+        # 4. EMERGENCY RULE: Rubber band ONLY if margin delta exceeds 10mm
+        if abs(best_mx - best_my) > 10.0:
+            best_mx = 21.0
+            best_my = 21.0
+            if best_cx > 1: PITCH_X = (sheet_length - 2 * best_mx - SLOT_L) / (best_cx - 1)
+            if best_cy > 1: PITCH_Y = (sheet_width - 2 * best_my - SLOT_H) / (best_cy - 1)
 
         return {
-            "pattern": "slot", "is_grouped": False, "count_x": best_cx, "count_y": c_y,
+            "pattern": "slot", "is_grouped": False, "count_x": best_cx, "count_y": best_cy,
             "pitch_x": PITCH_X, "pitch_y": PITCH_Y,
-            "margin_x": best_mx, "margin_y": m_y
+            "margin_x": best_mx, "margin_y": best_my
         }
 
     # ---------------------------------------------------------
-    # 2. GROUPED SQUARES (Q+)
+    # 2. GROUPED SQUARES (Q+) - UNTOUCHED
     # ---------------------------------------------------------
     if grouping:
         pitch_y = item_size + spacing
@@ -129,7 +147,6 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                 total_w = (ng * gw) + ((ng - 1) * test_gap)
                 mx = (sheet_length - total_w) / 2
                 
-                # Aim for 21.0mm target
                 dist = abs(mx - 21.0)
                 if dist < best_dist:
                     best_dist = dist
@@ -140,7 +157,6 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                     
         g_w = (best_c * item_size) + ((best_c - 1) * spacing)
         
-        # EMERGENCY RULE: Only rubber band if delta > 10mm
         if abs(best_mx - m_y) > 10.0:
             m_y = best_mx
             if c_y > 1: pitch_y = (sheet_width - 2*m_y - item_size) / (c_y - 1)
@@ -152,7 +168,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         }
 
     # ---------------------------------------------------------
-    # 3. STANDARD LOGIC (Diamond, Square, Circle)
+    # 3. STANDARD LOGIC (Diamond, Square, Circle) - UNTOUCHED
     # ---------------------------------------------------------
     if pattern_type == "diamond":
         pitch_x = (item_size + spacing) * math.sqrt(2)
@@ -163,11 +179,9 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         pitch_y = item_size + spacing
         bounding_size = item_size
 
-    # Get natural odd counts targeting 16-26mm margins
     c_x, m_x = get_natural_layout(sheet_length, bounding_size, pitch_x)
     c_y, m_y = get_natural_layout(sheet_width, bounding_size, pitch_y)
 
-    # EMERGENCY RULE: If difference > 10mm, rubber band to midpoint (21.0mm)
     if abs(m_x - m_y) > 10.0:
         m_x = 21.0
         m_y = 21.0
@@ -188,6 +202,8 @@ async def generate_dxf(payload: dict = Body(...)):
     if isinstance(payload, list): payload = payload[0]
 
     raw_pattern = payload.get("pattern", "Squares 10x10mm")
+    
+    global cfg 
     cfg = PATTERN_MAP.get(raw_pattern, PATTERN_MAP["Squares 10x10mm"])
     pattern = cfg["pattern"]
 
@@ -218,6 +234,9 @@ async def generate_dxf(payload: dict = Body(...)):
     
     if "PATTERN" not in doc.layers: doc.layers.new(name="PATTERN")
 
+    # 🆕 Slot Length Override specifically for the drawing loop
+    draw_hole_w = 29.9 if pattern == "slot" else hole_w
+    
     y = layout["margin_y"]
     for row in range(layout["count_y"]):
         if pattern == "slot":
@@ -230,34 +249,33 @@ async def generate_dxf(payload: dict = Body(...)):
                 g_start = layout["margin_x"] + (g * layout["group_stride"])
                 for c in range(layout["cols_per_group"]):
                     x = g_start + (c * layout["pitch_x"])
-                    msp.add_lwpolyline([(x,y),(x+hole_w,y),(x+hole_w,y+hole_h),(x,y+hole_h),(x,y)], dxfattribs={"layer":"PATTERN"})
+                    msp.add_lwpolyline([(x,y),(x+draw_hole_w,y),(x+draw_hole_w,y+hole_h),(x,y+hole_h),(x,y)], dxfattribs={"layer":"PATTERN"})
         else:
             x_start = layout["margin_x"] + row_off
             
-            # Universal Minus-One Symmetry
             current_count = layout["count_x"]
             if row_off > 0:
                 current_count -= 1
                 
             for c in range(current_count):
                 x = x_start + (c * layout["pitch_x"])
-                if x + hole_w > length: continue
+                if x + draw_hole_w > length: continue
 
                 if pattern == "square":
-                    msp.add_lwpolyline([(x,y),(x+hole_w,y),(x+hole_w,y+hole_h),(x,y+hole_h),(x,y)], dxfattribs={"layer":"PATTERN"})
+                    msp.add_lwpolyline([(x,y),(x+draw_hole_w,y),(x+draw_hole_w,y+hole_h),(x,y+hole_h),(x,y)], dxfattribs={"layer":"PATTERN"})
                 elif pattern == "slot":
                     r = hole_h / 2
-                    msp.add_line((x+r, y), (x+hole_w-r, y), dxfattribs={"layer":"PATTERN"})
-                    msp.add_line((x+r, y+hole_h), (x+hole_w-r, y+hole_h), dxfattribs={"layer":"PATTERN"})
+                    msp.add_line((x+r, y), (x+draw_hole_w-r, y), dxfattribs={"layer":"PATTERN"})
+                    msp.add_line((x+r, y+hole_h), (x+draw_hole_w-r, y+hole_h), dxfattribs={"layer":"PATTERN"})
                     msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
-                    msp.add_arc((x+hole_w-r, y+r), r, 270, 90, dxfattribs={"layer":"PATTERN"})
+                    msp.add_arc((x+draw_hole_w-r, y+r), r, 270, 90, dxfattribs={"layer":"PATTERN"})
                 elif pattern == "diamond":
-                    diag_w = hole_w * math.sqrt(2) 
+                    diag_w = draw_hole_w * math.sqrt(2) 
                     diag_h = hole_h * math.sqrt(2)
                     cx, cy = x + diag_w/2, y + diag_h/2
                     msp.add_lwpolyline([(cx, y), (x+diag_w, cy), (cx, y+diag_h), (x, cy), (cx, y)], dxfattribs={"layer":"PATTERN"})
                 elif pattern == "circle":
-                    r = hole_w / 2
+                    r = draw_hole_w / 2
                     msp.add_circle((x+r, y+r), r, dxfattribs={"layer":"PATTERN"})
 
         y += layout["pitch_y"]
