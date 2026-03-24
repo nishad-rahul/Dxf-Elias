@@ -23,59 +23,102 @@ PATTERN_MAP = {
 }
 
 # =========================================================
-# Helper: Optimized Odd Count (Always perfectly symmetric)
+# Helper: Natural Layout Finder (Targeting 16-26mm)
 # =========================================================
-def optimize_odd_count(available_length, item_size, pitch):
-    # Calculate natural max count
+def get_natural_layout(available_length, item_size, pitch, min_m=16.0, max_m=26.0):
+    """
+    Finds the Odd Count that naturally places the margin closest 
+    to the target range WITHOUT altering the pitch.
+    """
     max_c = math.floor((available_length - item_size) / pitch) + 1
-    # Force Odd Number
-    if max_c % 2 == 0:
+    if max_c % 2 == 0: 
         max_c -= 1
-    return max(1, max_c)
+        
+    best_c = max(1, max_c)
+    best_margin = (available_length - (item_size + (best_c - 1) * pitch)) / 2
+    best_dist = 9999
+    
+    target_mid = (min_m + max_m) / 2.0
+    
+    # Check max count and the next few odd counts down
+    for c in range(max_c, 0, -2):
+        margin = (available_length - (item_size + (c - 1) * pitch)) / 2
+        dist = abs(margin - target_mid)
+        
+        # Lock in the count that gets us closest to ~21mm naturally
+        if dist < best_dist:
+            best_dist = dist
+            best_c = c
+            best_margin = margin
+            
+    return best_c, best_margin
 
 # =========================================================
-# Layout Logic (MICRO-STRETCH / RUBBER BANDING)
+# Layout Logic
 # =========================================================
 def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, pattern_type, grouping=None):
-    
-    # 🎯 The Goldilocks Target Margin (Perfectly < 25mm on all sides)
-    TARGET_MARGIN = 20.0 
 
     # ---------------------------------------------------------
-    # 1. LONG SLOTHOLE (Muster L) 
+    # 1. LONG SLOTHOLE (Muster L)
     # ---------------------------------------------------------
     if pattern_type == "slot":
         SLOT_L = 45.0
         SLOT_H = 8.5
         PITCH_Y = 17.0
         
-        # Calculate natural counts
-        count_x = optimize_odd_count(sheet_length, SLOT_L, SLOT_L + 8.5)
-        count_y = optimize_odd_count(sheet_width, SLOT_H, PITCH_Y)
+        # Get natural Y using rigid 17.0mm pitch
+        c_y, m_y = get_natural_layout(sheet_width, SLOT_H, PITCH_Y)
         
-        # Rubber Band Both Axes to hit EXACTLY 20mm margins
-        new_pitch_x = (sheet_length - (2 * TARGET_MARGIN) - SLOT_L) / max(1, count_x - 1)
-        new_pitch_y = (sheet_width - (2 * TARGET_MARGIN) - SLOT_H) / max(1, count_y - 1)
+        # Find X using allowable standard gaps (8.5 - 12.0)
+        best_gap = 8.5
+        best_cx = 1
+        best_mx = 0
+        best_dist = 9999
         
+        for test_gap in [x * 0.1 for x in range(85, 121)]:
+            test_pitch = SLOT_L + test_gap
+            cx = math.floor((sheet_length - SLOT_L) / test_pitch) + 1
+            if cx % 2 == 0: cx -= 1
+            cx = max(1, cx)
+            
+            mx = (sheet_length - (SLOT_L + (cx - 1) * test_pitch)) / 2
+            dist = abs(mx - m_y) # Try to match X to Y naturally
+            
+            if dist < best_dist:
+                best_dist = dist
+                best_gap = test_gap
+                best_cx = cx
+                best_mx = mx
+                
+        PITCH_X = SLOT_L + best_gap
+        
+        # EMERGENCY RULE: Only rubber band if delta > 10mm
+        if abs(best_mx - m_y) > 10.0:
+            m_y = best_mx
+            if c_y > 1: PITCH_Y = (sheet_width - 2*m_y - SLOT_H) / (c_y - 1)
+
         return {
-            "pattern": "slot", "is_grouped": False, "count_x": count_x, "count_y": count_y,
-            "pitch_x": new_pitch_x, "pitch_y": new_pitch_y,
-            "margin_x": TARGET_MARGIN, "margin_y": TARGET_MARGIN
+            "pattern": "slot", "is_grouped": False, "count_x": best_cx, "count_y": c_y,
+            "pitch_x": PITCH_X, "pitch_y": PITCH_Y,
+            "margin_x": best_mx, "margin_y": m_y
         }
 
     # ---------------------------------------------------------
     # 2. GROUPED SQUARES (Q+)
     # ---------------------------------------------------------
     if grouping:
+        pitch_y = item_size + spacing
+        c_y, m_y = get_natural_layout(sheet_width, item_size, pitch_y)
+        
         base_col = grouping.get("base_col_count", 8)
         min_gap, max_gap = grouping.get("gap_range", [60.0, 75.0])
         
         best_c = base_col
         best_gap = min_gap
         best_ng = 1
-        best_diff = 999
+        best_mx = 0
+        best_dist = 9999
         
-        # Find the group arrangement that gets us closest to 20mm margin naturally
         for c in range(base_col, 100): 
             gw = (c * item_size) + ((c - 1) * spacing)
             for gap_int in range(int(min_gap * 10), int(max_gap * 10) + 1):
@@ -86,29 +129,26 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                 total_w = (ng * gw) + ((ng - 1) * test_gap)
                 mx = (sheet_length - total_w) / 2
                 
-                if abs(mx - TARGET_MARGIN) < best_diff:
-                    best_diff = abs(mx - TARGET_MARGIN)
+                # Aim for 21.0mm target
+                dist = abs(mx - 21.0)
+                if dist < best_dist:
+                    best_dist = dist
                     best_c = c
+                    best_gap = test_gap
                     best_ng = ng
+                    best_mx = mx
                     
         g_w = (best_c * item_size) + ((best_c - 1) * spacing)
         
-        # Rubber Band the Group Gap to hit EXACTLY 20mm
-        if best_ng > 1:
-            final_gap = (sheet_length - (2 * TARGET_MARGIN) - (best_ng * g_w)) / (best_ng - 1)
-        else:
-            final_gap = min_gap
-            TARGET_MARGIN = (sheet_length - g_w) / 2 # Fallback if only 1 group fits
-            
-        # Y-Axis Rubber Banding
-        pitch_y = item_size + spacing
-        count_y = optimize_odd_count(sheet_width, item_size, pitch_y)
-        new_pitch_y = (sheet_width - (2 * TARGET_MARGIN) - item_size) / max(1, count_y - 1)
-            
+        # EMERGENCY RULE: Only rubber band if delta > 10mm
+        if abs(best_mx - m_y) > 10.0:
+            m_y = best_mx
+            if c_y > 1: pitch_y = (sheet_width - 2*m_y - item_size) / (c_y - 1)
+
         return {
             "is_grouped": True, "num_groups": best_ng, "cols_per_group": best_c,
-            "group_stride": g_w + final_gap, "pitch_x": item_size + spacing, "pitch_y": new_pitch_y,
-            "margin_x": TARGET_MARGIN, "margin_y": TARGET_MARGIN, "count_y": count_y
+            "group_stride": g_w + best_gap, "pitch_x": item_size + spacing, "pitch_y": pitch_y,
+            "margin_x": best_mx, "margin_y": m_y, "count_y": c_y
         }
 
     # ---------------------------------------------------------
@@ -123,18 +163,21 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         pitch_y = item_size + spacing
         bounding_size = item_size
 
-    # Natural Odd Counts
-    count_x = optimize_odd_count(sheet_length, bounding_size, pitch_x)
-    count_y = optimize_odd_count(sheet_width, bounding_size, pitch_y)
+    # Get natural odd counts targeting 16-26mm margins
+    c_x, m_x = get_natural_layout(sheet_length, bounding_size, pitch_x)
+    c_y, m_y = get_natural_layout(sheet_width, bounding_size, pitch_y)
 
-    # 🚀 THE MICRO-STRETCH: Rubber Band both axes to hit exactly 20.0mm margin
-    new_pitch_x = (sheet_length - (2 * TARGET_MARGIN) - bounding_size) / max(1, count_x - 1)
-    new_pitch_y = (sheet_width - (2 * TARGET_MARGIN) - bounding_size) / max(1, count_y - 1)
+    # EMERGENCY RULE: If difference > 10mm, rubber band to midpoint (21.0mm)
+    if abs(m_x - m_y) > 10.0:
+        m_x = 21.0
+        m_y = 21.0
+        if c_x > 1: pitch_x = (sheet_length - 2*m_x - bounding_size) / (c_x - 1)
+        if c_y > 1: pitch_y = (sheet_width - 2*m_y - bounding_size) / (c_y - 1)
 
     return {
-        "is_grouped": False, "count_x": count_x, "count_y": count_y,
-        "pitch_x": new_pitch_x, "pitch_y": new_pitch_y,
-        "margin_x": TARGET_MARGIN, "margin_y": TARGET_MARGIN
+        "is_grouped": False, "count_x": c_x, "count_y": c_y,
+        "pitch_x": pitch_x, "pitch_y": pitch_y,
+        "margin_x": m_x, "margin_y": m_y
     }
 
 # =========================================================
@@ -177,7 +220,6 @@ async def generate_dxf(payload: dict = Body(...)):
 
     y = layout["margin_y"]
     for row in range(layout["count_y"]):
-        # The offset is dynamically calculated using the NEW micro-stretched pitch
         if pattern == "slot":
             row_off = (layout["pitch_x"] / 2) if row % 2 != 0 else 0
         else:
@@ -192,7 +234,7 @@ async def generate_dxf(payload: dict = Body(...)):
         else:
             x_start = layout["margin_x"] + row_off
             
-            # The Universal Symmetry 'Minus One' Rule
+            # Universal Minus-One Symmetry
             current_count = layout["count_x"]
             if row_off > 0:
                 current_count -= 1
