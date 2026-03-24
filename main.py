@@ -10,10 +10,10 @@ app = FastAPI()
 # Pattern Configuration
 # =========================================================
 PATTERN_MAP = {
-    # ⬜ SQUARES (Staggered): Now symmetrical!
+    # ⬜ SQUARES (Staggered)
     "Squares 10x10mm": {"pattern": "square", "hole_size": 10, "spacing": 10, "offset": "half"},
     
-    # ▦ SQUARES (Grouped): UPDATED TO OPTION B LOGIC
+    # ▦ SQUARES (Grouped): Dynamic Option B
     "Squares Grouped": {
         "pattern": "square", "hole_size": 10, "spacing": 10, "offset": "none",
         "grouping": {
@@ -23,13 +23,13 @@ PATTERN_MAP = {
         }
     },
     
-    # 💎 DIAMOND: Fixed 5.1mm spacing (Symmetrical)
+    # 💎 DIAMOND: Fixed 5.1mm spacing
     "Check 10x10mm": {"pattern": "diamond", "hole_size": 10, "spacing": 5.1, "offset": "half"},
     
-    # ⚪ ROUND: Circles (Symmetrical)
+    # ⚪ ROUND: Circles
     "Round hole 10mm": {"pattern": "circle", "hole_diameter": 10, "spacing": 10, "offset": "half"},
     
-    # ▬ SLOTS: Herx Dimensions (Symmetrical)
+    # ▬ SLOTS: Herx Dimensions
     "Slotted hole 35x10mm": {
         "pattern": "slot", 
         "slot_length": 45.0, 
@@ -43,13 +43,10 @@ PATTERN_MAP = {
 # Helper: Optimized Odd Count (Universal)
 # =========================================================
 def optimize_odd_count(available_length, item_size, pitch, stagger_offset=0):
-    # Calculate max possible count
     max_c = math.floor((available_length - item_size - stagger_offset - 34) / pitch) + 1
-    
     # FORCE ODD NUMBER for Center-Out Symmetry
     if max_c % 2 == 0:
         max_c -= 1
-        
     return max(1, max_c)
 
 # =========================================================
@@ -65,12 +62,10 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         SLOT_H = 8.5
         PITCH_Y = 17.0
         
-        # Rubber band logic
         best_gap = 8.5
         for test_gap in [x * 0.1 for x in range(85, 121)]:
             test_pitch = SLOT_L + test_gap
             
-            # Check ODD count fit
             raw_count = math.floor((sheet_length - 36 - SLOT_L) / test_pitch) + 1
             odd_count = raw_count if raw_count % 2 != 0 else raw_count - 1
             
@@ -83,14 +78,12 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
 
         PITCH_X = SLOT_L + best_gap
         
-        # Calculate ODD Counts
         raw_count_x = math.floor((sheet_length - 36 - SLOT_L) / PITCH_X) + 1
         count_x = raw_count_x if raw_count_x % 2 != 0 else raw_count_x - 1
         
         raw_count_y = math.floor((sheet_width - 36 - SLOT_H) / PITCH_Y) + 1
         count_y = raw_count_y if raw_count_y % 2 != 0 else raw_count_y - 1
         
-        # Center grid based on MAIN ROW (Odd Count)
         total_w = SLOT_L + (count_x - 1) * PITCH_X
         total_h = SLOT_H + (count_y - 1) * PITCH_Y
         
@@ -103,21 +96,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         }
 
     # ---------------------------------------------------------
-    # 2. STANDARD LOGIC (Diamond, Square, Circle)
-    # ---------------------------------------------------------
-    if pattern_type == "diamond":
-        pitch_x = (item_size + spacing) * math.sqrt(2)
-        pitch_y = pitch_x / 2
-        stagger_x = pitch_x / 2
-        bounding_size = item_size * math.sqrt(2)
-    else:
-        pitch_x = item_size + spacing
-        pitch_y = item_size + spacing
-        stagger_x = (pitch_x / 2)
-        bounding_size = item_size
-
-    # ---------------------------------------------------------
-    # 3. GROUPED SQUARES (Q+) - NEW OPTION B LOGIC
+    # 2. GROUPED SQUARES (Q+) - Dynamic Range
     # ---------------------------------------------------------
     if grouping:
         base_col = grouping.get("base_col_count", 8)
@@ -130,11 +109,8 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         best_margin_val = 9999
         found_perfect = False
         
-        # Option B: Iterate columns starting from base_col, dynamically expanding if needed
         for c in range(base_col, 100): 
             gw = (c * item_size) + ((c - 1) * spacing)
-            
-            # Stretch the gap (60.0 to 75.0)
             for gap_int in range(int(min_gap * 10), int(max_gap * 10) + 1):
                 test_gap = gap_int / 10.0
                 stride = gw + test_gap
@@ -143,7 +119,6 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                 total_w = (ng * gw) + ((ng - 1) * test_gap)
                 margin = (sheet_length - total_w) / 2
                 
-                # We want the margin to be positive but as small as possible, targeting <= max_margin
                 if 0 <= margin < best_margin_val:
                     best_c = c
                     best_gap = test_gap
@@ -153,13 +128,13 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                 if 0 <= margin <= max_margin:
                     found_perfect = True
                     break 
-            
-            if found_perfect:
-                break 
+            if found_perfect: break 
                 
-        # Final Dimensions for Grouping
         g_w = (best_c * item_size) + ((best_c - 1) * spacing)
+        pitch_y = item_size + spacing
         total_w = (best_ng * g_w) + ((best_ng - 1) * best_gap)
+        
+        # Syncing Q+ Y-axis
         count_y = optimize_odd_count(sheet_width, item_size, pitch_y)
         total_h = item_size + ((count_y - 1) * pitch_y)
         
@@ -169,18 +144,54 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
             "margin_x": (sheet_length - total_w) / 2, "margin_y": (sheet_width - total_h) / 2, "count_y": count_y
         }
 
-    # Standard Count - FORCED ODD
-    count_x = optimize_odd_count(sheet_length, bounding_size, pitch_x, 0)
-    item_h = bounding_size
-    count_y = optimize_odd_count(sheet_width, item_h, pitch_y)
+    # ---------------------------------------------------------
+    # 3. STANDARD LOGIC (Diamond, Square, Circle)
+    # ---------------------------------------------------------
+    if pattern_type == "diamond":
+        pitch_x = (item_size + spacing) * math.sqrt(2)
+        pitch_y = pitch_x / 2
+        stagger_x = pitch_x / 2
+        bounding_size = item_size * math.sqrt(2)
+    else:
+        pitch_x = item_size + spacing
+        pitch_y = item_size + spacing
+        stagger_x = (pitch_x / 2)
+        bounding_size = item_size
 
+    # 1. Get the X Margin first
+    count_x = optimize_odd_count(sheet_length, bounding_size, pitch_x, 0)
     total_w = bounding_size + ((count_x - 1) * pitch_x)
+    margin_x = (sheet_length - total_w) / 2
+
+    # 2. OPTION 2 LOGIC: Sync Top/Bottom to Left/Right
+    item_h = bounding_size
+    max_count_y = optimize_odd_count(sheet_width, item_h, pitch_y)
+    
+    best_count_y = max_count_y
+    best_margin_diff = float('inf')
+
+    # Drop exactly 2 rows at a time to keep symmetry ODD
+    for test_y in range(max_count_y, 0, -2):
+        test_h = item_h + ((test_y - 1) * pitch_y)
+        test_margin_y = (sheet_width - test_h) / 2
+        
+        # How close is the Y margin to the X margin?
+        diff = abs(test_margin_y - margin_x)
+        
+        if diff < best_margin_diff:
+            best_margin_diff = diff
+            best_count_y = test_y
+        else:
+            # The gap is getting wider, stop here!
+            break
+
+    count_y = best_count_y
     total_h = item_h + ((count_y - 1) * pitch_y)
 
     return {
         "is_grouped": False, "count_x": count_x, "count_y": count_y,
         "pitch_x": pitch_x, "pitch_y": pitch_y,
-        "margin_x": (sheet_length - total_w) / 2,
+        "margin_x": margin_x,
         "margin_y": (sheet_width - total_h) / 2
     }
 
@@ -211,10 +222,9 @@ async def generate_dxf(payload: dict = Body(...)):
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
     
-    # 🆕 CORRECTED OUTLINE: 3mm Radius with Perfect 0.4142 Bulge
     R = 3.0
     L, W = length, final_width
-    BULGE = 0.41421356 # tan(22.5) for 90 degree arc
+    BULGE = 0.41421356 
     points = [
         (L-R, 0, 0, 0, BULGE), (L, R, 0, 0, 0), (L, W-R, 0, 0, BULGE), (L-R, W, 0, 0, 0),
         (R, W, 0, 0, BULGE), (0, W-R, 0, 0, 0), (0, R, 0, 0, BULGE), (R, 0, 0, 0, 0)
@@ -225,7 +235,6 @@ async def generate_dxf(payload: dict = Body(...)):
 
     y = layout["margin_y"]
     for row in range(layout["count_y"]):
-        # Offset Logic
         if pattern == "slot":
             row_off = (layout["pitch_x"] / 2) if row % 2 != 0 else 0
         else:
@@ -240,8 +249,7 @@ async def generate_dxf(payload: dict = Body(...)):
         else:
             x_start = layout["margin_x"] + row_off
             
-            # 🆕 UNIVERSAL SYMMETRY FIX:
-            # Applies "Minus One" rule to ANY pattern with a stagger (Offset > 0)
+            # Universal Symmetry - Unchanged!
             current_count = layout["count_x"]
             if row_off > 0:
                 current_count -= 1
