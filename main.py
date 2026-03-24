@@ -9,108 +9,58 @@ app = FastAPI()
 # =========================================================
 # Pattern Configuration
 # =========================================================
-# 🆕 ALL Variant A margins strictly targeted between 16mm and 26mm
 PATTERN_MAP = {
-    "Squares 10x10mm": {
-        "pattern": "square", "hole_size": 10, "spacing": 10, "offset": "half",
-        "margin_range": [16.0, 26.0]
-    },
+    "Squares 10x10mm": {"pattern": "square", "hole_size": 10, "spacing": 10, "offset": "half"},
     "Squares Grouped": {
         "pattern": "square", "hole_size": 10, "spacing": 10, "offset": "none",
-        "grouping": {"base_col_count": 8, "gap_range": [60.0, 75.0], "max_margin": 26.0},
-        "margin_range": [16.0, 26.0]
+        "grouping": {"base_col_count": 8, "gap_range": [60.0, 75.0]}
     },
-    "Check 10x10mm": {
-        "pattern": "diamond", "hole_size": 10, "spacing": 5.1, "offset": "half",
-        "margin_range": [16.0, 26.0]
-    },
-    "Round hole 10mm": {
-        "pattern": "circle", "hole_diameter": 10, "spacing": 10, "offset": "half",
-        "margin_range": [16.0, 26.0]
-    },
+    "Check 10x10mm": {"pattern": "diamond", "hole_size": 10, "spacing": 5.1, "offset": "half"},
+    "Round hole 10mm": {"pattern": "circle", "hole_diameter": 10, "spacing": 10, "offset": "half"},
     "Slotted hole 35x10mm": {
-        "pattern": "slot", "slot_length": 45.0, "slot_width": 8.5, "spacing": 8.5, "offset": "half",
-        "margin_range": [16.0, 26.0]
+        "pattern": "slot", "slot_length": 45.0, "slot_width": 8.5, "spacing": 8.5, "offset": "half"
     },
 }
 
 # =========================================================
-# Helper: Optimized Odd Count with Strict Margin Boundary
+# Helper: Optimized Odd Count (Always perfectly symmetric)
 # =========================================================
-def optimize_odd_count_for_margin(available_length, item_size, pitch, margin_range):
-    min_m, max_m = margin_range[0], margin_range[1]
-    
-    # Absolute max odd count
+def optimize_odd_count(available_length, item_size, pitch):
+    # Calculate natural max count
     max_c = math.floor((available_length - item_size) / pitch) + 1
+    # Force Odd Number
     if max_c % 2 == 0:
         max_c -= 1
-        
-    best_c = max_c
-    
-    # Step down 2 at a time to maintain perfect Center-Out symmetry
-    for c in range(max_c, 0, -2):
-        margin = (available_length - (item_size + (c - 1) * pitch)) / 2
-        
-        # If it lands perfectly in the 16-26 zone, lock it in!
-        if min_m <= margin <= max_m:
-            return c
-            
-        # If dropping columns makes the margin wider than 26mm, stop.
-        # Figure out whether the "too small" or "too big" margin is mathematically closer to our target.
-        if margin > max_m:
-            prev_c = c + 2
-            prev_margin = (available_length - (item_size + (prev_c - 1) * pitch)) / 2
-            
-            if abs(margin - max_m) < abs(prev_margin - min_m):
-                return c
-            else:
-                return prev_c
-                
-    return max(1, best_c)
+    return max(1, max_c)
 
 # =========================================================
-# Layout Logic
+# Layout Logic (MICRO-STRETCH / RUBBER BANDING)
 # =========================================================
-def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, pattern_type, cfg):
-    margin_range = cfg.get("margin_range", [16.0, 26.0])
-    grouping = cfg.get("grouping")
+def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, pattern_type, grouping=None):
+    
+    # 🎯 The Goldilocks Target Margin (Perfectly < 25mm on all sides)
+    TARGET_MARGIN = 20.0 
 
     # ---------------------------------------------------------
-    # 1. LONG SLOTHOLE (Muster L)
+    # 1. LONG SLOTHOLE (Muster L) 
     # ---------------------------------------------------------
     if pattern_type == "slot":
         SLOT_L = 45.0
         SLOT_H = 8.5
         PITCH_Y = 17.0
         
-        best_gap = 8.5
-        for test_gap in [x * 0.1 for x in range(85, 121)]:
-            test_pitch = SLOT_L + test_gap
-            raw_count = math.floor((sheet_length - (margin_range[0]*2) - SLOT_L) / test_pitch) + 1
-            odd_count = raw_count if raw_count % 2 != 0 else raw_count - 1
-            
-            total_w = SLOT_L + (odd_count - 1) * test_pitch
-            margin = (sheet_length - total_w) / 2
-            
-            if margin_range[0] <= margin <= margin_range[1]:
-                best_gap = test_gap
-                break 
-
-        PITCH_X = SLOT_L + best_gap
+        # Calculate natural counts
+        count_x = optimize_odd_count(sheet_length, SLOT_L, SLOT_L + 8.5)
+        count_y = optimize_odd_count(sheet_width, SLOT_H, PITCH_Y)
         
-        # Y-axis relies on the rigid pitch, so we use the boundary function
-        count_x = math.floor((sheet_length - (margin_range[0]*2) - SLOT_L) / PITCH_X) + 1
-        count_x = count_x if count_x % 2 != 0 else count_x - 1
-        
-        count_y = optimize_odd_count_for_margin(sheet_width, SLOT_H, PITCH_Y, margin_range)
-        
-        total_w = SLOT_L + (count_x - 1) * PITCH_X
-        total_h = SLOT_H + (count_y - 1) * PITCH_Y
+        # Rubber Band Both Axes to hit EXACTLY 20mm margins
+        new_pitch_x = (sheet_length - (2 * TARGET_MARGIN) - SLOT_L) / max(1, count_x - 1)
+        new_pitch_y = (sheet_width - (2 * TARGET_MARGIN) - SLOT_H) / max(1, count_y - 1)
         
         return {
             "pattern": "slot", "is_grouped": False, "count_x": count_x, "count_y": count_y,
-            "pitch_x": PITCH_X, "pitch_y": PITCH_Y,
-            "margin_x": (sheet_length - total_w) / 2, "margin_y": (sheet_width - total_h) / 2
+            "pitch_x": new_pitch_x, "pitch_y": new_pitch_y,
+            "margin_x": TARGET_MARGIN, "margin_y": TARGET_MARGIN
         }
 
     # ---------------------------------------------------------
@@ -119,14 +69,13 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
     if grouping:
         base_col = grouping.get("base_col_count", 8)
         min_gap, max_gap = grouping.get("gap_range", [60.0, 75.0])
-        max_margin = grouping.get("max_margin", 26.0)
         
         best_c = base_col
         best_gap = min_gap
         best_ng = 1
-        best_margin_val = 9999
-        found_perfect = False
+        best_diff = 999
         
+        # Find the group arrangement that gets us closest to 20mm margin naturally
         for c in range(base_col, 100): 
             gw = (c * item_size) + ((c - 1) * spacing)
             for gap_int in range(int(min_gap * 10), int(max_gap * 10) + 1):
@@ -135,31 +84,31 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                 
                 ng = max(1, math.floor((sheet_length + test_gap) / stride))
                 total_w = (ng * gw) + ((ng - 1) * test_gap)
-                margin = (sheet_length - total_w) / 2
+                mx = (sheet_length - total_w) / 2
                 
-                if 0 <= margin < best_margin_val:
+                if abs(mx - TARGET_MARGIN) < best_diff:
+                    best_diff = abs(mx - TARGET_MARGIN)
                     best_c = c
-                    best_gap = test_gap
                     best_ng = ng
-                    best_margin_val = margin
-                
-                if margin_range[0] <= margin <= margin_range[1]:
-                    found_perfect = True
-                    break 
-            if found_perfect: break 
-                
+                    
         g_w = (best_c * item_size) + ((best_c - 1) * spacing)
+        
+        # Rubber Band the Group Gap to hit EXACTLY 20mm
+        if best_ng > 1:
+            final_gap = (sheet_length - (2 * TARGET_MARGIN) - (best_ng * g_w)) / (best_ng - 1)
+        else:
+            final_gap = min_gap
+            TARGET_MARGIN = (sheet_length - g_w) / 2 # Fallback if only 1 group fits
+            
+        # Y-Axis Rubber Banding
         pitch_y = item_size + spacing
-        total_w = (best_ng * g_w) + ((best_ng - 1) * best_gap)
-        
-        # Force Y-axis into 16-26 zone
-        count_y = optimize_odd_count_for_margin(sheet_width, item_size, pitch_y, margin_range)
-        total_h = item_size + ((count_y - 1) * pitch_y)
-        
+        count_y = optimize_odd_count(sheet_width, item_size, pitch_y)
+        new_pitch_y = (sheet_width - (2 * TARGET_MARGIN) - item_size) / max(1, count_y - 1)
+            
         return {
             "is_grouped": True, "num_groups": best_ng, "cols_per_group": best_c,
-            "group_stride": g_w + best_gap, "pitch_x": item_size + spacing, "pitch_y": pitch_y,
-            "margin_x": (sheet_length - total_w) / 2, "margin_y": (sheet_width - total_h) / 2, "count_y": count_y
+            "group_stride": g_w + final_gap, "pitch_x": item_size + spacing, "pitch_y": new_pitch_y,
+            "margin_x": TARGET_MARGIN, "margin_y": TARGET_MARGIN, "count_y": count_y
         }
 
     # ---------------------------------------------------------
@@ -174,18 +123,18 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         pitch_y = item_size + spacing
         bounding_size = item_size
 
-    # 🆕 Syncing all 4 sides to the 16-26mm boundary
-    count_x = optimize_odd_count_for_margin(sheet_length, bounding_size, pitch_x, margin_range)
-    count_y = optimize_odd_count_for_margin(sheet_width, bounding_size, pitch_y, margin_range)
+    # Natural Odd Counts
+    count_x = optimize_odd_count(sheet_length, bounding_size, pitch_x)
+    count_y = optimize_odd_count(sheet_width, bounding_size, pitch_y)
 
-    total_w = bounding_size + ((count_x - 1) * pitch_x)
-    total_h = bounding_size + ((count_y - 1) * pitch_y)
+    # 🚀 THE MICRO-STRETCH: Rubber Band both axes to hit exactly 20.0mm margin
+    new_pitch_x = (sheet_length - (2 * TARGET_MARGIN) - bounding_size) / max(1, count_x - 1)
+    new_pitch_y = (sheet_width - (2 * TARGET_MARGIN) - bounding_size) / max(1, count_y - 1)
 
     return {
         "is_grouped": False, "count_x": count_x, "count_y": count_y,
-        "pitch_x": pitch_x, "pitch_y": pitch_y,
-        "margin_x": (sheet_length - total_w) / 2,
-        "margin_y": (sheet_width - total_h) / 2
+        "pitch_x": new_pitch_x, "pitch_y": new_pitch_y,
+        "margin_x": TARGET_MARGIN, "margin_y": TARGET_MARGIN
     }
 
 # =========================================================
@@ -206,7 +155,7 @@ async def generate_dxf(payload: dict = Body(...)):
     hole_w = cfg.get("slot_length", 35) if pattern == "slot" else cfg.get("hole_size", 10)
     hole_h = cfg.get("slot_width", 10) if pattern == "slot" else hole_w
 
-    layout = calculate_layout_params(length, width, hole_w, cfg["spacing"], pattern, cfg)
+    layout = calculate_layout_params(length, width, hole_w, cfg["spacing"], pattern, cfg.get("grouping"))
 
     final_width = width + 5.1 if bent_top else width
 
@@ -228,6 +177,7 @@ async def generate_dxf(payload: dict = Body(...)):
 
     y = layout["margin_y"]
     for row in range(layout["count_y"]):
+        # The offset is dynamically calculated using the NEW micro-stretched pitch
         if pattern == "slot":
             row_off = (layout["pitch_x"] / 2) if row % 2 != 0 else 0
         else:
@@ -242,7 +192,7 @@ async def generate_dxf(payload: dict = Body(...)):
         else:
             x_start = layout["margin_x"] + row_off
             
-            # Universal Symmetry Check (Minus One Rule)
+            # The Universal Symmetry 'Minus One' Rule
             current_count = layout["count_x"]
             if row_off > 0:
                 current_count -= 1
