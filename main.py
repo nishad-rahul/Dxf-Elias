@@ -20,15 +20,15 @@ PATTERN_MAP = {
     
     "Slotted hole 35x10mm": {
         "pattern": "slot", 
-        "slot_length": 29.9, # Hardcoded in math, listed here for reference
-        "slot_width": 8.5, 
+        "slot_length": 29.9, # Fixed Machine Tool Size
+        "slot_width": 8.5,   # Fixed Machine Tool Size
         "spacing": 8.5, 
         "offset": "half"
     },
 }
 
 # =========================================================
-# Helper: Natural Layout Finder 
+# Helper: Natural Layout Finder (For Standard Patterns)
 # =========================================================
 def get_natural_layout(available_length, item_size, pitch, min_m=16.0, max_m=26.0):
     max_c = math.floor((available_length - item_size) / pitch) + 1
@@ -58,72 +58,95 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
     grouping = cfg.get("grouping")
 
     # ---------------------------------------------------------
-    # 1. LONG SLOTHOLE (Muster L) - BULLETPROOF BOUNDARIES
+    # 1. LONG SLOTHOLE (Muster L) - BULLETPROOF 16mm WALL
     # ---------------------------------------------------------
     if pattern_type == "slot":
-        # 1. FIXED MACHINE DIMENSIONS
+        # FIXED MACHINE DIMENSIONS
         SLOT_L = 29.9 
         SLOT_H = cfg.get("slot_width", 8.5)
         
         # --- X-AXIS CALCULATION ---
-        # Find maximum odd slots that guarantee a >= 16.0mm margin
-        min_pitch_x = SLOT_L + 7.0
-        max_cx = math.floor((sheet_length - 2 * 16.0 - SLOT_L) / min_pitch_x) + 1
+        best_cx = 1
+        best_mx = (sheet_length - SLOT_L) / 2.0
+        PITCH_X = SLOT_L + 7.5
+        
+        # Calculate absolute max possible odd columns
+        max_cx = math.floor((sheet_length - SLOT_L) / (SLOT_L + 7.0)) + 1
         if max_cx % 2 == 0: max_cx -= 1
-        best_cx = max(1, max_cx)
         
-        # Scan 7.0 to 8.0 gap to get margin as close to 21.0 as possible
-        best_gap_x = 7.5
-        best_mx = (sheet_length - (SLOT_L + (best_cx - 1) * (SLOT_L + best_gap_x))) / 2
-        
-        for test_gap in [x * 0.1 for x in range(70, 81)]: 
-            test_pitch = SLOT_L + test_gap
-            mx = (sheet_length - (SLOT_L + (best_cx - 1) * test_pitch)) / 2
-            if abs(mx - 21.0) < abs(best_mx - 21.0):
-                best_mx = mx
-                best_gap_x = test_gap
-                
-        PITCH_X = SLOT_L + best_gap_x
-        
-        # --- Y-AXIS CALCULATION ---
-        # Find max odd rows that guarantee >= 16.0mm margin (vert gap = 24.0-25.0)
-        min_gap_y = 24.0
-        min_pitch_y = (SLOT_H + min_gap_y) / 2.0
-        
-        max_cy = math.floor((sheet_width - 2 * 16.0 - SLOT_H) / min_pitch_y) + 1
-        if max_cy % 2 == 0: max_cy -= 1
-        best_cy = max(1, max_cy)
-        
-        best_gap_y = 24.5
-        best_my = (sheet_width - (SLOT_H + (best_cy - 1) * ((SLOT_H + best_gap_y) / 2.0))) / 2
-        
-        for test_gap in [x * 0.1 for x in range(240, 251)]: 
-            test_pitch_y = (SLOT_H + test_gap) / 2.0
-            my = (sheet_width - (SLOT_H + (best_cy - 1) * test_pitch_y)) / 2
-            if abs(my - 21.0) < abs(best_my - 21.0):
-                best_my = my
-                best_gap_y = test_gap
-                
-        PITCH_Y = (SLOT_H + best_gap_y) / 2.0
-        
-        # --- EMERGENCY OVERRIDE (RUBBER BAND) ---
-        # Trigger if margins are out of bounds (>26.0) or differ by >10mm
-        # Only override if best_c > 1 (we cannot stretch a single slot)
-        if abs(best_mx - best_my) > 10.0 or best_mx > 26.0 or best_my > 26.0:
+        # Step down by 2 until we find a layout that guarantees >= 16mm margin
+        for cx in range(max(1, max_cx), 0, -2):
+            # The smallest gap (7.0) yields the largest possible margin for this column count
+            max_possible_margin = (sheet_length - (SLOT_L + (cx - 1) * (SLOT_L + 7.0))) / 2
             
-            # Force X to 21.0mm if safe
-            if best_cx > 1:
-                test_pitch_x = (sheet_length - 2 * 21.0 - SLOT_L) / (best_cx - 1)
-                if test_pitch_x >= SLOT_L + 2.0: # Absolute protection against overlap
-                    PITCH_X = test_pitch_x
-                    best_mx = 21.0
+            if max_possible_margin >= 16.0:
+                best_cx = cx
+                best_dist = 9999
+                
+                # Check standard gaps (7.0 to 8.0) to land inside 16.0 to 26.0
+                for test_gap in [x * 0.1 for x in range(70, 81)]: 
+                    mx = (sheet_length - (SLOT_L + (cx - 1) * (SLOT_L + test_gap))) / 2
+                    if 16.0 <= mx <= 26.0:
+                        dist = abs(mx - 21.0)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_mx = mx
+                            PITCH_X = SLOT_L + test_gap
+                            
+                if best_dist != 9999:
+                    break # Perfect fit found!
                     
-            # Force Y to 21.0mm if safe
-            if best_cy > 1:
-                test_pitch_y = (sheet_width - 2 * 21.0 - SLOT_H) / (best_cy - 1)
-                if test_pitch_y >= SLOT_H + 2.0: # Absolute protection against overlap
-                    PITCH_Y = test_pitch_y
-                    best_my = 21.0
+                # HARD WALL OVERRIDE: 
+                # If margin would be > 26mm, force it to 21.0mm and rubber-band the gap
+                best_mx = 21.0
+                if best_cx > 1:
+                    PITCH_X = (sheet_length - 2 * 21.0 - SLOT_L) / (best_cx - 1)
+                break
+
+        # --- Y-AXIS CALCULATION ---
+        best_cy = 1
+        best_my = (sheet_width - SLOT_H) / 2.0
+        PITCH_Y = (SLOT_H + 24.5) / 2.0
+        
+        # Calculate absolute max possible odd rows (based on 24.0 vertical gap)
+        max_cy = math.floor((sheet_width - SLOT_H) / ((SLOT_H + 24.0) / 2.0)) + 1
+        if max_cy % 2 == 0: max_cy -= 1
+        
+        # Step down by 2 until we guarantee >= 16mm margin
+        for cy in range(max(1, max_cy), 0, -2):
+            max_possible_margin_y = (sheet_width - (SLOT_H + (cy - 1) * ((SLOT_H + 24.0) / 2.0))) / 2
+            
+            if max_possible_margin_y >= 16.0:
+                best_cy = cy
+                best_dist = 9999
+                
+                # Check standard vertical gaps (24.0 to 25.0)
+                for test_gap in [x * 0.1 for x in range(240, 251)]: 
+                    test_pitch_y = (SLOT_H + test_gap) / 2.0
+                    my = (sheet_width - (SLOT_H + (cy - 1) * test_pitch_y)) / 2
+                    if 16.0 <= my <= 26.0:
+                        dist = abs(my - 21.0)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_my = my
+                            PITCH_Y = test_pitch_y
+                            
+                if best_dist != 9999:
+                    break
+                    
+                # HARD WALL OVERRIDE
+                best_my = 21.0
+                if best_cy > 1:
+                    PITCH_Y = (sheet_width - 2 * 21.0 - SLOT_H) / (best_cy - 1)
+                break
+        
+        # --- DELTA ENFORCEMENT ---
+        # If margins differ by > 10mm, sync them both to exactly 21.0mm
+        if abs(best_mx - best_my) > 10.0:
+            best_mx = 21.0
+            best_my = 21.0
+            if best_cx > 1: PITCH_X = (sheet_length - 2 * 21.0 - SLOT_L) / (best_cx - 1)
+            if best_cy > 1: PITCH_Y = (sheet_width - 2 * 21.0 - SLOT_H) / (best_cy - 1)
 
         return {
             "pattern": "slot", "is_grouped": False, "count_x": best_cx, "count_y": best_cy,
@@ -223,7 +246,6 @@ async def generate_dxf(payload: dict = Body(...)):
     hole_w = cfg.get("slot_length", 35) if pattern == "slot" else cfg.get("hole_size", 10)
     hole_h = cfg.get("slot_width", 10) if pattern == "slot" else hole_w
 
-    # Passed config properly to avoid global state drift
     layout = calculate_layout_params(length, width, hole_w, cfg["spacing"], pattern, cfg)
 
     final_width = width + 5.1 if bent_top else width
@@ -244,7 +266,7 @@ async def generate_dxf(payload: dict = Body(...)):
     
     if "PATTERN" not in doc.layers: doc.layers.new(name="PATTERN")
 
-    # Hardcoded render to guarantee no resizing for Slot 
+    # Lock machine tool coordinates perfectly for slots
     draw_hole_w = 29.9 if pattern == "slot" else hole_w
     draw_hole_h = 8.5 if pattern == "slot" else hole_h
     
