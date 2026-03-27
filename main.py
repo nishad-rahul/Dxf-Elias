@@ -20,8 +20,8 @@ PATTERN_MAP = {
     
     "Slotted hole 35x10mm": {
         "pattern": "slot", 
-        "slot_length": 29.9, # Hardcoded in math below, listed here for reference
-        "slot_width": 8.5, 
+        "slot_length": 29.9, # Fixed Tool Size
+        "slot_width": 8.5,   # Fixed Tool Size
         "spacing": 8.5, 
         "offset": "half"
     },
@@ -57,19 +57,20 @@ def get_natural_layout(available_length, item_size, pitch, min_m=16.0, max_m=26.
 def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, pattern_type, grouping=None):
 
     # ---------------------------------------------------------
-    # 1. LONG SLOTHOLE (Muster L) - ISOLATED FIX
+    # 1. LONG SLOTHOLE (Muster L) - HARDCORE BOUNDARIES
     # ---------------------------------------------------------
     if pattern_type == "slot":
-        # 1. HARDCODED SLOT SIZE
+        # FIXED MACHINE DIMENSIONS (Never altered)
         SLOT_L = 29.9 
         SLOT_H = cfg.get("slot_width", 8.5)
         
-        # 2. X-AXIS: Horizontal gap strictly 7.0mm to 8.0mm
+        # --- X-AXIS CALCULATION ---
         best_gap_x = 7.5
         best_cx = 1
         best_mx = 0
         best_dist_x = 9999
         
+        # 1. Try to find the best layout using standard 7-8mm gaps
         for test_gap in [x * 0.1 for x in range(70, 81)]: 
             test_pitch = SLOT_L + test_gap
             cx = math.floor((sheet_length - SLOT_L) / test_pitch) + 1
@@ -77,7 +78,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
             cx = max(1, cx)
             
             mx = (sheet_length - (SLOT_L + (cx - 1) * test_pitch)) / 2
-            dist = abs(mx - 21.0) # Target the middle of 16-26mm
+            dist = abs(mx - 21.0) 
             if dist < best_dist_x:
                 best_dist_x = dist
                 best_gap_x = test_gap
@@ -86,14 +87,19 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                 
         PITCH_X = SLOT_L + best_gap_x
         
-        # 3. Y-AXIS: Same-column vertical gap strictly 24.0mm to 25.0mm
-        # Because slots are staggered, vertically aligned slots are 2 rows apart.
-        # Math: 2 * RowPitch = SlotHeight + VerticalGap
+        # 🚨 HARDCORE ENFORCEMENT: If margin falls outside 16-26mm, rubber band the gap
+        if best_mx < 16.0 or best_mx > 26.0:
+            best_mx = 21.0
+            if best_cx > 1:
+                PITCH_X = (sheet_length - 2 * best_mx - SLOT_L) / (best_cx - 1)
+        
+        # --- Y-AXIS CALCULATION ---
         best_gap_y = 24.5
         best_cy = 1
         best_my = 0
         best_dist_y = 9999
         
+        # 1. Try to find the best layout using standard 24-25mm vertical gaps
         for test_gap in [x * 0.1 for x in range(240, 251)]: 
             test_pitch_y = (SLOT_H + test_gap) / 2.0
             cy = math.floor((sheet_width - SLOT_H) / test_pitch_y) + 1
@@ -110,7 +116,14 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                 
         PITCH_Y = (SLOT_H + best_gap_y) / 2.0
         
-        # 4. EMERGENCY RULE: Rubber band ONLY if margin delta exceeds 10mm
+        # 🚨 HARDCORE ENFORCEMENT: If margin falls outside 16-26mm, rubber band the gap
+        if best_my < 16.0 or best_my > 26.0:
+            best_my = 21.0
+            if best_cy > 1:
+                PITCH_Y = (sheet_width - 2 * best_my - SLOT_H) / (best_cy - 1)
+        
+        # --- DELTA ENFORCEMENT ---
+        # If margins differ by > 10mm, sync them both to exactly 21.0mm
         if abs(best_mx - best_my) > 10.0:
             best_mx = 21.0
             best_my = 21.0
@@ -236,8 +249,9 @@ async def generate_dxf(payload: dict = Body(...)):
     
     if "PATTERN" not in doc.layers: doc.layers.new(name="PATTERN")
 
-    # Slot Length Override specifically for the drawing loop
+    # Slot Machine Tool Fix: Absolute override to prevent any rendering drift
     draw_hole_w = 29.9 if pattern == "slot" else hole_w
+    draw_hole_h = 8.5 if pattern == "slot" else hole_h
     
     y = layout["margin_y"]
     for row in range(layout["count_y"]):
@@ -251,7 +265,7 @@ async def generate_dxf(payload: dict = Body(...)):
                 g_start = layout["margin_x"] + (g * layout["group_stride"])
                 for c in range(layout["cols_per_group"]):
                     x = g_start + (c * layout["pitch_x"])
-                    msp.add_lwpolyline([(x,y),(x+draw_hole_w,y),(x+draw_hole_w,y+hole_h),(x,y+hole_h),(x,y)], dxfattribs={"layer":"PATTERN"})
+                    msp.add_lwpolyline([(x,y),(x+draw_hole_w,y),(x+draw_hole_w,y+draw_hole_h),(x,y+draw_hole_h),(x,y)], dxfattribs={"layer":"PATTERN"})
         else:
             x_start = layout["margin_x"] + row_off
             
@@ -264,16 +278,16 @@ async def generate_dxf(payload: dict = Body(...)):
                 if x + draw_hole_w > length: continue
 
                 if pattern == "square":
-                    msp.add_lwpolyline([(x,y),(x+draw_hole_w,y),(x+draw_hole_w,y+hole_h),(x,y+hole_h),(x,y)], dxfattribs={"layer":"PATTERN"})
+                    msp.add_lwpolyline([(x,y),(x+draw_hole_w,y),(x+draw_hole_w,y+draw_hole_h),(x,y+draw_hole_h),(x,y)], dxfattribs={"layer":"PATTERN"})
                 elif pattern == "slot":
-                    r = hole_h / 2
+                    r = draw_hole_h / 2
                     msp.add_line((x+r, y), (x+draw_hole_w-r, y), dxfattribs={"layer":"PATTERN"})
-                    msp.add_line((x+r, y+hole_h), (x+draw_hole_w-r, y+hole_h), dxfattribs={"layer":"PATTERN"})
+                    msp.add_line((x+r, y+draw_hole_h), (x+draw_hole_w-r, y+draw_hole_h), dxfattribs={"layer":"PATTERN"})
                     msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer":"PATTERN"})
                     msp.add_arc((x+draw_hole_w-r, y+r), r, 270, 90, dxfattribs={"layer":"PATTERN"})
                 elif pattern == "diamond":
                     diag_w = draw_hole_w * math.sqrt(2) 
-                    diag_h = hole_h * math.sqrt(2)
+                    diag_h = draw_hole_h * math.sqrt(2)
                     cx, cy = x + diag_w/2, y + diag_h/2
                     msp.add_lwpolyline([(cx, y), (x+diag_w, cy), (cx, y+diag_h), (x, cy), (cx, y)], dxfattribs={"layer":"PATTERN"})
                 elif pattern == "circle":
