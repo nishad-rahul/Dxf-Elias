@@ -23,13 +23,13 @@ PATTERN_MAP = {
     "Round hole 10mm": {
         "pattern": "circle", "hole_diameter": 10, "spacing": 10, "offset": "half"
     },
-    "Slotted hole 35x10mm": {
-        "pattern": "slot",
-        "slot_length": 29.9,
-        "slot_width": 8.5,
-        "spacing": 8.5,
-        "offset": "half"
-    },
+   "Slotted hole 35x10mm": {
+    "pattern": "slot",
+    "slot_length": 45.0,
+    "slot_width": 8.5,
+    "spacing": 8.5,
+    "offset": "half"
+},
 }
 
 # =========================================================
