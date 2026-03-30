@@ -7,28 +7,33 @@ import math
 app = FastAPI()
 
 # =========================================================
-# Pattern Configuration
+# Pattern Configuration (shared by Variant A and Variant W)
 # =========================================================
 PATTERN_MAP = {
-    "Squares 10x10mm": {"pattern": "square", "hole_size": 10, "spacing": 10, "offset": "half"},
+    "Squares 10x10mm": {
+        "pattern": "square", "hole_size": 10, "spacing": 10, "offset": "half"
+    },
     "Squares Grouped": {
         "pattern": "square", "hole_size": 10, "spacing": 10, "offset": "none",
         "grouping": {"base_col_count": 8, "gap_range": [60.0, 75.0]}
     },
-    "Check 10x10mm": {"pattern": "diamond", "hole_size": 10, "spacing": 5.1, "offset": "half"},
-    "Round hole 10mm": {"pattern": "circle", "hole_diameter": 10, "spacing": 10, "offset": "half"},
-    
+    "Check 10x10mm": {
+        "pattern": "diamond", "hole_size": 10, "spacing": 5.1, "offset": "half"
+    },
+    "Round hole 10mm": {
+        "pattern": "circle", "hole_diameter": 10, "spacing": 10, "offset": "half"
+    },
     "Slotted hole 35x10mm": {
-        "pattern": "slot", 
+        "pattern": "slot",
         "slot_length": 29.9,
         "slot_width": 8.5,
-        "spacing": 8.5, 
+        "spacing": 8.5,
         "offset": "half"
     },
 }
 
 # =========================================================
-# Helper: Natural Layout Finder (For Standard Patterns)
+# Helper: Natural Layout Finder (shared)
 # =========================================================
 def get_natural_layout(available_length, item_size, pitch, min_m=16.0, max_m=26.0):
     max_c = math.floor((available_length - item_size) / pitch) + 1
@@ -45,11 +50,11 @@ def get_natural_layout(available_length, item_size, pitch, min_m=16.0, max_m=26.
         margin = (available_length - (item_size + (c - 1) * pitch)) / 2
 
         if margin < min_m:
-            # Below hard floor — skip, stepping down will increase margin
+            # Below hard floor — skip, stepping down increases margin
             continue
 
         if margin > max_m:
-            # Above ceiling — record only if nothing better found yet, keep looping
+            # Above ceiling — record only if nothing better yet, keep looping
             dist = abs(margin - target_mid)
             if dist < best_dist:
                 best_dist = dist
@@ -57,14 +62,14 @@ def get_natural_layout(available_length, item_size, pitch, min_m=16.0, max_m=26.
                 best_margin = margin
             continue
 
-        # Inside the valid zone [min_m, max_m]
+        # Inside valid zone [min_m, max_m]
         dist = abs(margin - target_mid)
         if dist < best_dist:
             best_dist = dist
             best_c = c
             best_margin = margin
 
-    # Safety net: if no valid layout found (extremely small sheet), use single centered hole
+    # Safety net: extremely small sheet — center a single hole
     if best_dist == 9999:
         best_c = 1
         best_margin = (available_length - item_size) / 2
@@ -72,7 +77,7 @@ def get_natural_layout(available_length, item_size, pitch, min_m=16.0, max_m=26.
     return best_c, best_margin
 
 # =========================================================
-# Layout Logic
+# Layout Logic (shared)
 # =========================================================
 def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, pattern_type, cfg):
     grouping = cfg.get("grouping")
@@ -112,6 +117,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                 if best_dist != 9999:
                     break
 
+                # Hard wall override
                 best_mx = 21.0
                 if best_cx > 1:
                     PITCH_X = (sheet_length - 2 * 21.0 - SLOT_L) / (best_cx - 1)
@@ -146,12 +152,13 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                 if best_dist != 9999:
                     break
 
+                # Hard wall override
                 best_my = 21.0
                 if best_cy > 1:
                     PITCH_Y = (sheet_width - 2 * 21.0 - SLOT_H) / (best_cy - 1)
                 break
 
-        # --- DELTA ENFORCEMENT ---
+        # --- Delta enforcement ---
         if abs(best_mx - best_my) > 10.0:
             best_mx = 21.0
             best_my = 21.0
@@ -161,7 +168,8 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                 PITCH_Y = (sheet_width - 2 * 21.0 - SLOT_H) / (best_cy - 1)
 
         return {
-            "pattern": "slot", "is_grouped": False, "count_x": best_cx, "count_y": best_cy,
+            "pattern": "slot", "is_grouped": False,
+            "count_x": best_cx, "count_y": best_cy,
             "pitch_x": PITCH_X, "pitch_y": PITCH_Y,
             "margin_x": best_mx, "margin_y": best_my
         }
@@ -192,7 +200,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                 total_w = (ng * gw) + ((ng - 1) * test_gap)
                 mx = (sheet_length - total_w) / 2
 
-                # Enforce 16 mm hard floor for grouped squares
+                # Enforce 16 mm hard floor
                 if mx < 16.0:
                     continue
 
@@ -204,7 +212,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                     best_ng = ng
                     best_mx = mx
 
-        # Safety net if no valid grouped layout found
+        # Safety net
         if best_dist == 9999:
             best_mx = 21.0
 
@@ -217,24 +225,25 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
 
         return {
             "is_grouped": True, "num_groups": best_ng, "cols_per_group": best_c,
-            "group_stride": g_w + best_gap, "pitch_x": item_size + spacing, "pitch_y": pitch_y,
-            "margin_x": best_mx, "margin_y": m_y, "count_y": c_y
+            "group_stride": g_w + best_gap, "pitch_x": item_size + spacing,
+            "pitch_y": pitch_y, "margin_x": best_mx, "margin_y": m_y,
+            "count_y": c_y
         }
 
     # ---------------------------------------------------------
     # 3. STANDARD LOGIC (Diamond, Square, Circle)
     # ---------------------------------------------------------
     if pattern_type == "diamond":
-        pitch_x = (item_size + spacing) * math.sqrt(2)
-        pitch_y = pitch_x / 2
+        pitch_x       = (item_size + spacing) * math.sqrt(2)
+        pitch_y       = pitch_x / 2
         bounding_size = item_size * math.sqrt(2)
     else:
-        pitch_x = item_size + spacing
-        pitch_y = item_size + spacing
+        pitch_x       = item_size + spacing
+        pitch_y       = item_size + spacing
         bounding_size = item_size
 
     c_x, m_x = get_natural_layout(sheet_length, bounding_size, pitch_x)
-    c_y, m_y = get_natural_layout(sheet_width, bounding_size, pitch_y)
+    c_y, m_y = get_natural_layout(sheet_width,  bounding_size, pitch_y)
 
     if abs(m_x - m_y) > 10.0:
         m_x = 21.0
@@ -242,7 +251,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
         if c_x > 1:
             pitch_x = (sheet_length - 2 * m_x - bounding_size) / (c_x - 1)
         if c_y > 1:
-            pitch_y = (sheet_width - 2 * m_y - bounding_size) / (c_y - 1)
+            pitch_y = (sheet_width  - 2 * m_y - bounding_size) / (c_y - 1)
 
     return {
         "is_grouped": False, "count_x": c_x, "count_y": c_y,
@@ -251,71 +260,103 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
     }
 
 # =========================================================
-# DXF Generator Endpoint
+# Outline Builder — Variant A
+# All four corners: 3 mm rounded
 # =========================================================
-@app.post("/generate_dxf")
-async def generate_dxf(payload: dict = Body(...)):
-    if isinstance(payload, list):
-        payload = payload[0]
-
-    raw_pattern = payload.get("pattern", "Squares 10x10mm")
-
-    cfg = PATTERN_MAP.get(raw_pattern, PATTERN_MAP["Squares 10x10mm"])
-    pattern = cfg["pattern"]
-
-    customer = str(payload.get("customer", "Standard")).replace(" ", "_")
-    length, width = float(payload.get("length", 500)), float(payload.get("width", 300))
-    bent_top = payload.get("bent_top", False)
-
-    hole_w = cfg.get("slot_length", 35) if pattern == "slot" else cfg.get("hole_size", 10)
-    hole_h = cfg.get("slot_width", 10) if pattern == "slot" else hole_w
-
-    layout = calculate_layout_params(length, width, hole_w, cfg["spacing"], pattern, cfg)
-
-    final_width = width + 5.1 if bent_top else width
-
-    os.makedirs("output_dxf", exist_ok=True)
-    filename = f"output_dxf/{customer}_{int(length)}x{int(final_width)}.dxf"
-    doc = ezdxf.new("R2010")
-    msp = doc.modelspace()
-
-    R = 3.0
-    L, W = length, final_width
+def draw_outline_a(msp, L, W, R=3.0):
     BULGE = 0.41421356
     points = [
-        (L-R, 0, 0, 0, BULGE), (L, R, 0, 0, 0), (L, W-R, 0, 0, BULGE), (L-R, W, 0, 0, 0),
-        (R, W, 0, 0, BULGE), (0, W-R, 0, 0, 0), (0, R, 0, 0, BULGE), (R, 0, 0, 0, 0)
+        (L-R, 0,   0, 0, BULGE),
+        (L,   R,   0, 0, 0),
+        (L,   W-R, 0, 0, BULGE),
+        (L-R, W,   0, 0, 0),
+        (R,   W,   0, 0, BULGE),
+        (0,   W-R, 0, 0, 0),
+        (0,   R,   0, 0, BULGE),
+        (R,   0,   0, 0, 0),
     ]
-    msp.add_lwpolyline(points, format="xyseb", dxfattribs={"layer": "OUTLINE", "closed": True})
+    msp.add_lwpolyline(
+        points,
+        format="xyseb",
+        dxfattribs={"layer": "OUTLINE", "closed": True}
+    )
 
-    if "PATTERN" not in doc.layers:
-        doc.layers.new(name="PATTERN")
+# =========================================================
+# Outline Builder — Variant W
+# Top-left and top-right: sharp 90° corners
+# Bottom-left and bottom-right: 3 mm rounded
+# =========================================================
+def draw_outline_w(msp, L, W, R=3.0):
+    BULGE = 0.41421356
+    points = [
+        (R,   0,   0, 0, 0),      # bottom edge start (after bottom-left arc)
+        (L-R, 0,   0, 0, BULGE),  # before bottom-right arc
+        (L,   R,   0, 0, 0),      # bottom-right arc end → up right side
+        (L,   W,   0, 0, 0),      # top-right sharp corner
+        (0,   W,   0, 0, 0),      # top-left sharp corner
+        (0,   R,   0, 0, BULGE),  # before bottom-left arc
+    ]
+    msp.add_lwpolyline(
+        points,
+        format="xyseb",
+        dxfattribs={"layer": "OUTLINE", "closed": True}
+    )
 
-    draw_hole_w = 29.9 if pattern == "slot" else hole_w
-    draw_hole_h = 8.5 if pattern == "slot" else hole_h
+# =========================================================
+# Bend Fold Lines — Variant W only
+# Two short horizontal lines at actual_bend mm from top edge,
+# left side and right side only
+# =========================================================
+def draw_bend_lines_w(msp, L, W, bend):
+    fold_y = W - bend
+
+    # Left fold line
+    msp.add_line(
+        (0,      fold_y),
+        (bend,   fold_y),
+        dxfattribs={"layer": "BEND"}
+    )
+    # Right fold line
+    msp.add_line(
+        (L - bend, fold_y),
+        (L,        fold_y),
+        dxfattribs={"layer": "BEND"}
+    )
+
+# =========================================================
+# Pattern Draw (shared by Variant A and Variant W)
+# =========================================================
+def draw_pattern(msp, layout, cfg, pattern, L, W):
+    draw_hole_w = 29.9 if pattern == "slot" else cfg.get("hole_size", 10)
+    draw_hole_h = 8.5  if pattern == "slot" else cfg.get("hole_size", 10)
 
     y = layout["margin_y"]
+
     for row in range(layout["count_y"]):
 
+        # Determine offset for staggered rows
         if pattern == "slot":
             is_offset_row = (row % 2 != 0)
-            row_off = (layout["pitch_x"] / 2) if is_offset_row else 0
         else:
             is_offset_row = (cfg["offset"] == "half" and row % 2 != 0)
-            row_off = (layout["pitch_x"] / 2) if is_offset_row else 0
+
+        row_off = (layout["pitch_x"] / 2) if is_offset_row else 0
 
         if layout.get("is_grouped", False):
+            # Grouped squares — no stagger
             for g in range(layout["num_groups"]):
                 g_start = layout["margin_x"] + (g * layout["group_stride"])
                 for c in range(layout["cols_per_group"]):
                     x = g_start + (c * layout["pitch_x"])
                     msp.add_lwpolyline(
-                        [(x, y), (x+draw_hole_w, y), (x+draw_hole_w, y+draw_hole_h), (x, y+draw_hole_h), (x, y)],
+                        [(x, y), (x+draw_hole_w, y), (x+draw_hole_w, y+draw_hole_h),
+                         (x, y+draw_hole_h), (x, y)],
                         dxfattribs={"layer": "PATTERN"}
                     )
         else:
             x_start = layout["margin_x"] + row_off
 
+            # Staggered rows have one fewer hole (minus-one rule)
             current_count = layout["count_x"]
             if is_offset_row:
                 current_count -= 1
@@ -323,29 +364,36 @@ async def generate_dxf(payload: dict = Body(...)):
             for c in range(current_count):
                 x = x_start + (c * layout["pitch_x"])
 
-                # Boundary guards
-                if x + draw_hole_w > length:
+                # Boundary guards — never punch outside the sheet
+                if x + draw_hole_w > L:
                     continue
-                if y + draw_hole_h > width:
+                if y + draw_hole_h > W:
                     continue
 
                 if pattern == "square":
                     msp.add_lwpolyline(
-                        [(x, y), (x+draw_hole_w, y), (x+draw_hole_w, y+draw_hole_h), (x, y+draw_hole_h), (x, y)],
+                        [(x, y), (x+draw_hole_w, y), (x+draw_hole_w, y+draw_hole_h),
+                         (x, y+draw_hole_h), (x, y)],
                         dxfattribs={"layer": "PATTERN"}
                     )
                 elif pattern == "slot":
                     r = draw_hole_h / 2
-                    msp.add_line((x+r, y), (x+draw_hole_w-r, y), dxfattribs={"layer": "PATTERN"})
-                    msp.add_line((x+r, y+draw_hole_h), (x+draw_hole_w-r, y+draw_hole_h), dxfattribs={"layer": "PATTERN"})
-                    msp.add_arc((x+r, y+r), r, 90, 270, dxfattribs={"layer": "PATTERN"})
-                    msp.add_arc((x+draw_hole_w-r, y+r), r, 270, 90, dxfattribs={"layer": "PATTERN"})
+                    msp.add_line((x+r, y), (x+draw_hole_w-r, y),
+                                 dxfattribs={"layer": "PATTERN"})
+                    msp.add_line((x+r, y+draw_hole_h), (x+draw_hole_w-r, y+draw_hole_h),
+                                 dxfattribs={"layer": "PATTERN"})
+                    msp.add_arc((x+r, y+r), r, 90, 270,
+                                dxfattribs={"layer": "PATTERN"})
+                    msp.add_arc((x+draw_hole_w-r, y+r), r, 270, 90,
+                                dxfattribs={"layer": "PATTERN"})
                 elif pattern == "diamond":
                     diag_w = draw_hole_w * math.sqrt(2)
                     diag_h = draw_hole_h * math.sqrt(2)
-                    cx, cy = x + diag_w / 2, y + diag_h / 2
+                    cx_pt  = x + diag_w / 2
+                    cy_pt  = y + diag_h / 2
                     msp.add_lwpolyline(
-                        [(cx, y), (x+diag_w, cy), (cx, y+diag_h), (x, cy), (cx, y)],
+                        [(cx_pt, y), (x+diag_w, cy_pt), (cx_pt, y+diag_h),
+                         (x, cy_pt), (cx_pt, y)],
                         dxfattribs={"layer": "PATTERN"}
                     )
                 elif pattern == "circle":
@@ -354,6 +402,97 @@ async def generate_dxf(payload: dict = Body(...)):
 
         y += layout["pitch_y"]
 
+# =========================================================
+# Single Endpoint — routes to Variant A or Variant W
+# based on "variant" field in payload ("A" or "W")
+# =========================================================
+@app.post("/generate_dxf")
+async def generate_dxf(payload: dict = Body(...)):
+    if isinstance(payload, list):
+        payload = payload[0]
+
+    # --- Read common inputs ---
+    customer    = str(payload.get("customer", "Standard")).replace(" ", "_")
+    raw_pattern = payload.get("pattern", "Squares 10x10mm")
+    variant     = str(payload.get("variant", "A")).upper()  # "A" or "W"
+
+    # --- Dimension resolution by variant ---
+    if variant == "W":
+        # Variant W: apply bending shrink corrections
+        stated_width  = float(payload.get("width",  1294))
+        stated_length = float(payload.get("length",  416))
+        stated_bend   = float(payload.get("bend",      9))
+
+        L           = stated_width  - 1.2   # e.g. 1294 → 1292.8 mm
+        W           = stated_length - 0.6   # e.g. 416  → 415.4  mm
+        actual_bend = stated_bend   - 1.2   # e.g. 9    → 7.8    mm
+
+        output_dir  = "output_dxf_w"
+        filename_id = f"{int(stated_width)}x{int(stated_length)}"
+
+    else:
+        # Variant A: use dimensions as-is
+        length   = float(payload.get("length", 500))
+        width    = float(payload.get("width",  300))
+        bent_top = payload.get("bent_top", False)
+
+        L = length
+        W = width + 5.1 if bent_top else width
+
+        output_dir  = "output_dxf"
+        filename_id = f"{int(length)}x{int(W)}"
+
+    # --- Get pattern config ---
+    cfg     = PATTERN_MAP.get(raw_pattern, PATTERN_MAP["Squares 10x10mm"])
+    pattern = cfg["pattern"]
+
+    hole_w = cfg.get("slot_length", 35) if pattern == "slot" else cfg.get("hole_size", 10)
+    hole_h = cfg.get("slot_width",  10) if pattern == "slot" else hole_w
+
+    # --- Calculate layout ---
+    # Variant A uses original width (before bent_top addition) for layout
+    layout_length = L
+    layout_width  = float(payload.get("width", 300)) if variant == "A" else W
+    layout = calculate_layout_params(layout_length, layout_width, hole_w, cfg["spacing"], pattern, cfg)
+
+    # --- Build DXF ---
+    os.makedirs(output_dir, exist_ok=True)
+    filename = f"{output_dir}/{customer}_{filename_id}.dxf"
+
+    doc = ezdxf.new("R2010")
+    msp = doc.modelspace()
+
+    layers = ["OUTLINE", "PATTERN"]
+    if variant == "W":
+        layers.append("BEND")
+    for layer_name in layers:
+        if layer_name not in doc.layers:
+            doc.layers.new(name=layer_name)
+
+    # --- Draw outline based on variant ---
+    if variant == "W":
+        draw_outline_w(msp, L, W)
+        draw_bend_lines_w(msp, L, W, actual_bend)
+    else:
+        draw_outline_a(msp, L, W)
+
+    # --- Draw pattern (shared) ---
+    draw_pattern(msp, layout, cfg, pattern, L, layout_width)
+
+    # --- Save and return ---
     doc.saveas(filename)
     with open(filename, "rb") as f:
-        return {"status": "ok", "file_name": os.path.basename(filename), "file_base64": base64.b64encode(f.read()).decode()}
+        response = {
+            "status":      "ok",
+            "variant":     variant,
+            "file_name":   os.path.basename(filename),
+            "file_base64": base64.b64encode(f.read()).decode()
+        }
+
+    # Return corrected dimensions for Variant W so caller can verify
+    if variant == "W":
+        response["actual_width"]  = L
+        response["actual_length"] = W
+        response["actual_bend"]   = actual_bend
+
+    return response
