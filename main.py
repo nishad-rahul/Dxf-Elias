@@ -82,9 +82,9 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
     # 1. LONG SLOTHOLE (Muster L)
     # ---------------------------------------------------------
     if pattern_type == "slot":
-        # Read slot dimensions directly from cfg — single source of truth
-        SLOT_L = cfg.get("slot_length", 45.0)
-        SLOT_H = cfg.get("slot_width", 8.5)
+        # Always read from cfg — single source of truth
+        SLOT_L = cfg["slot_length"]
+        SLOT_H = cfg["slot_width"]
 
         # --- X-AXIS ---
         best_cx = 1
@@ -284,12 +284,12 @@ def draw_outline_a(msp, L, W, R=3.0):
 def draw_outline_w(msp, L, W, R=3.0):
     BULGE = 0.41421356
     points = [
-        (R,   0,   0, 0, 0),      # bottom edge start (after bottom-left arc)
-        (L-R, 0,   0, 0, BULGE),  # before bottom-right arc
-        (L,   R,   0, 0, 0),      # bottom-right arc end → up right side
-        (L,   W,   0, 0, 0),      # top-right sharp corner
-        (0,   W,   0, 0, 0),      # top-left sharp corner
-        (0,   R,   0, 0, BULGE),  # before bottom-left arc
+        (R,   0,   0, 0, 0),
+        (L-R, 0,   0, 0, BULGE),
+        (L,   R,   0, 0, 0),
+        (L,   W,   0, 0, 0),
+        (0,   W,   0, 0, 0),
+        (0,   R,   0, 0, BULGE),
     ]
     msp.add_lwpolyline(
         points,
@@ -299,39 +299,24 @@ def draw_outline_w(msp, L, W, R=3.0):
 
 # =========================================================
 # Bend Fold Lines — Variant W only
-# Two short horizontal lines at actual_bend mm from top edge,
-# left side and right side only
 # =========================================================
 def draw_bend_lines_w(msp, L, W, bend):
     fold_y = W - bend
-
-    # Left fold line
-    msp.add_line(
-        (0,    fold_y),
-        (bend, fold_y),
-        dxfattribs={"layer": "BEND"}
-    )
-    # Right fold line
-    msp.add_line(
-        (L - bend, fold_y),
-        (L,        fold_y),
-        dxfattribs={"layer": "BEND"}
-    )
+    msp.add_line((0, fold_y), (bend, fold_y), dxfattribs={"layer": "BEND"})
+    msp.add_line((L - bend, fold_y), (L, fold_y), dxfattribs={"layer": "BEND"})
 
 # =========================================================
 # Pattern Draw (shared by Variant A and Variant W)
-# Slot dimensions are always read from cfg — never hardcoded
+# Slot dimensions always read from cfg — never hardcoded
 # =========================================================
 def draw_pattern(msp, layout, cfg, pattern, L, W):
-    # Read slot size from cfg so it always matches PATTERN_MAP
-    draw_hole_w = cfg.get("slot_length", 45.0) if pattern == "slot" else cfg.get("hole_size", 10)
-    draw_hole_h = cfg.get("slot_width",  8.5)  if pattern == "slot" else cfg.get("hole_size", 10)
+    draw_hole_w = cfg["slot_length"] if pattern == "slot" else cfg.get("hole_size", 10)
+    draw_hole_h = cfg["slot_width"]  if pattern == "slot" else cfg.get("hole_size", 10)
 
     y = layout["margin_y"]
 
     for row in range(layout["count_y"]):
 
-        # Determine offset for staggered rows
         if pattern == "slot":
             is_offset_row = (row % 2 != 0)
         else:
@@ -340,7 +325,6 @@ def draw_pattern(msp, layout, cfg, pattern, L, W):
         row_off = (layout["pitch_x"] / 2) if is_offset_row else 0
 
         if layout.get("is_grouped", False):
-            # Grouped squares — no stagger
             for g in range(layout["num_groups"]):
                 g_start = layout["margin_x"] + (g * layout["group_stride"])
                 for c in range(layout["cols_per_group"]):
@@ -352,8 +336,6 @@ def draw_pattern(msp, layout, cfg, pattern, L, W):
                     )
         else:
             x_start = layout["margin_x"] + row_off
-
-            # Staggered rows have one fewer hole (minus-one rule)
             current_count = layout["count_x"]
             if is_offset_row:
                 current_count -= 1
@@ -361,7 +343,6 @@ def draw_pattern(msp, layout, cfg, pattern, L, W):
             for c in range(current_count):
                 x = x_start + (c * layout["pitch_x"])
 
-                # Boundary guards — never punch outside the sheet
                 if x + draw_hole_w > L:
                     continue
                 if y + draw_hole_h > W:
@@ -401,34 +382,30 @@ def draw_pattern(msp, layout, cfg, pattern, L, W):
 
 # =========================================================
 # Single Endpoint — routes to Variant A or Variant W
-# based on "variant" field in payload ("A" or "W")
 # =========================================================
 @app.post("/generate_dxf")
 async def generate_dxf(payload: dict = Body(...)):
     if isinstance(payload, list):
         payload = payload[0]
 
-    # --- Read common inputs ---
     customer    = str(payload.get("customer", "Standard")).replace(" ", "_")
     raw_pattern = payload.get("pattern", "Squares 10x10mm")
-    variant     = str(payload.get("variant", "A")).upper()  # "A" or "W"
+    variant     = str(payload.get("variant", "A")).upper()
 
     # --- Dimension resolution by variant ---
     if variant == "W":
-        # Variant W: apply bending shrink corrections
         stated_width  = float(payload.get("width",  1294))
         stated_length = float(payload.get("length",  416))
         stated_bend   = float(payload.get("bend",      9))
 
-        L           = stated_width  - 1.2   # e.g. 1294 → 1292.8 mm
-        W           = stated_length - 0.6   # e.g. 416  → 415.4  mm
-        actual_bend = stated_bend   - 1.2   # e.g. 9    → 7.8    mm
+        L           = stated_width  - 1.2
+        W           = stated_length - 0.6
+        actual_bend = stated_bend   - 1.2
 
         output_dir  = "output_dxf_w"
         filename_id = f"{int(stated_width)}x{int(stated_length)}"
 
     else:
-        # Variant A: use dimensions as-is
         length   = float(payload.get("length", 500))
         width    = float(payload.get("width",  300))
         bent_top = payload.get("bent_top", False)
@@ -440,17 +417,30 @@ async def generate_dxf(payload: dict = Body(...)):
         filename_id = f"{int(length)}x{int(W)}"
 
     # --- Get pattern config ---
-    cfg     = PATTERN_MAP.get(raw_pattern, PATTERN_MAP["Squares 10x10mm"])
-    pattern = cfg["pattern"]
+    # Log the raw_pattern received so we can verify it matches PATTERN_MAP keys
+    print(f"[DEBUG] raw_pattern received: '{raw_pattern}'")
+    print(f"[DEBUG] available keys: {list(PATTERN_MAP.keys())}")
 
-    hole_w = cfg.get("slot_length", 45.0) if pattern == "slot" else cfg.get("hole_size", 10)
-    hole_h = cfg.get("slot_width",  8.5)  if pattern == "slot" else hole_w
+    cfg = PATTERN_MAP.get(raw_pattern)
+    if cfg is None:
+        # Pattern not found — return error immediately instead of silently falling back
+        return {
+            "status": "error",
+            "message": f"Pattern '{raw_pattern}' not found. Available patterns: {list(PATTERN_MAP.keys())}"
+        }
+
+    pattern = cfg["pattern"]
+    print(f"[DEBUG] resolved pattern type: '{pattern}', cfg: {cfg}")
+
+    hole_w = cfg["slot_length"] if pattern == "slot" else cfg.get("hole_size", 10)
+    hole_h = cfg["slot_width"]  if pattern == "slot" else hole_w
 
     # --- Calculate layout ---
-    # Variant A uses original width (before bent_top addition) for layout
     layout_length = L
     layout_width  = float(payload.get("width", 300)) if variant == "A" else W
     layout = calculate_layout_params(layout_length, layout_width, hole_w, cfg["spacing"], pattern, cfg)
+
+    print(f"[DEBUG] layout: {layout}")
 
     # --- Build DXF ---
     os.makedirs(output_dir, exist_ok=True)
@@ -466,17 +456,14 @@ async def generate_dxf(payload: dict = Body(...)):
         if layer_name not in doc.layers:
             doc.layers.new(name=layer_name)
 
-    # --- Draw outline based on variant ---
     if variant == "W":
         draw_outline_w(msp, L, W)
         draw_bend_lines_w(msp, L, W, actual_bend)
     else:
         draw_outline_a(msp, L, W)
 
-    # --- Draw pattern (shared) ---
     draw_pattern(msp, layout, cfg, pattern, L, layout_width)
 
-    # --- Save and return ---
     doc.saveas(filename)
     with open(filename, "rb") as f:
         response = {
@@ -486,7 +473,6 @@ async def generate_dxf(payload: dict = Body(...)):
             "file_base64": base64.b64encode(f.read()).decode()
         }
 
-    # Return corrected dimensions for Variant W so caller can verify
     if variant == "W":
         response["actual_width"]  = L
         response["actual_length"] = W
