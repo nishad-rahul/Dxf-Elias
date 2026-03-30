@@ -23,13 +23,13 @@ PATTERN_MAP = {
     "Round hole 10mm": {
         "pattern": "circle", "hole_diameter": 10, "spacing": 10, "offset": "half"
     },
-   "Slotted hole 35x10mm": {
-    "pattern": "slot",
-    "slot_length": 45.0,
-    "slot_width": 8.5,
-    "spacing": 8.5,
-    "offset": "half"
-},
+    "Slotted hole 35x10mm": {
+        "pattern": "slot",
+        "slot_length": 45.0,
+        "slot_width": 8.5,
+        "spacing": 8.5,
+        "offset": "half"
+    },
 }
 
 # =========================================================
@@ -50,11 +50,9 @@ def get_natural_layout(available_length, item_size, pitch, min_m=16.0, max_m=26.
         margin = (available_length - (item_size + (c - 1) * pitch)) / 2
 
         if margin < min_m:
-            # Below hard floor — skip, stepping down increases margin
             continue
 
         if margin > max_m:
-            # Above ceiling — record only if nothing better yet, keep looping
             dist = abs(margin - target_mid)
             if dist < best_dist:
                 best_dist = dist
@@ -62,14 +60,12 @@ def get_natural_layout(available_length, item_size, pitch, min_m=16.0, max_m=26.
                 best_margin = margin
             continue
 
-        # Inside valid zone [min_m, max_m]
         dist = abs(margin - target_mid)
         if dist < best_dist:
             best_dist = dist
             best_c = c
             best_margin = margin
 
-    # Safety net: extremely small sheet — center a single hole
     if best_dist == 9999:
         best_c = 1
         best_margin = (available_length - item_size) / 2
@@ -86,7 +82,8 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
     # 1. LONG SLOTHOLE (Muster L)
     # ---------------------------------------------------------
     if pattern_type == "slot":
-        SLOT_L = 29.9
+        # Read slot dimensions directly from cfg — single source of truth
+        SLOT_L = cfg.get("slot_length", 45.0)
         SLOT_H = cfg.get("slot_width", 8.5)
 
         # --- X-AXIS ---
@@ -200,7 +197,6 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                 total_w = (ng * gw) + ((ng - 1) * test_gap)
                 mx = (sheet_length - total_w) / 2
 
-                # Enforce 16 mm hard floor
                 if mx < 16.0:
                     continue
 
@@ -212,7 +208,6 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
                     best_ng = ng
                     best_mx = mx
 
-        # Safety net
         if best_dist == 9999:
             best_mx = 21.0
 
@@ -312,8 +307,8 @@ def draw_bend_lines_w(msp, L, W, bend):
 
     # Left fold line
     msp.add_line(
-        (0,      fold_y),
-        (bend,   fold_y),
+        (0,    fold_y),
+        (bend, fold_y),
         dxfattribs={"layer": "BEND"}
     )
     # Right fold line
@@ -325,10 +320,12 @@ def draw_bend_lines_w(msp, L, W, bend):
 
 # =========================================================
 # Pattern Draw (shared by Variant A and Variant W)
+# Slot dimensions are always read from cfg — never hardcoded
 # =========================================================
 def draw_pattern(msp, layout, cfg, pattern, L, W):
-    draw_hole_w = 29.9 if pattern == "slot" else cfg.get("hole_size", 10)
-    draw_hole_h = 8.5  if pattern == "slot" else cfg.get("hole_size", 10)
+    # Read slot size from cfg so it always matches PATTERN_MAP
+    draw_hole_w = cfg.get("slot_length", 45.0) if pattern == "slot" else cfg.get("hole_size", 10)
+    draw_hole_h = cfg.get("slot_width",  8.5)  if pattern == "slot" else cfg.get("hole_size", 10)
 
     y = layout["margin_y"]
 
@@ -446,8 +443,8 @@ async def generate_dxf(payload: dict = Body(...)):
     cfg     = PATTERN_MAP.get(raw_pattern, PATTERN_MAP["Squares 10x10mm"])
     pattern = cfg["pattern"]
 
-    hole_w = cfg.get("slot_length", 35) if pattern == "slot" else cfg.get("hole_size", 10)
-    hole_h = cfg.get("slot_width",  10) if pattern == "slot" else hole_w
+    hole_w = cfg.get("slot_length", 45.0) if pattern == "slot" else cfg.get("hole_size", 10)
+    hole_h = cfg.get("slot_width",  8.5)  if pattern == "slot" else hole_w
 
     # --- Calculate layout ---
     # Variant A uses original width (before bent_top addition) for layout
