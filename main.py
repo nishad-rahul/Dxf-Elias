@@ -277,34 +277,41 @@ def draw_outline_a(msp, L, W, R=3.0):
 
 # =========================================================
 # Outline Builder — Variant W
-# Top-left and top-right: sharp 90° corners
+# Top-left and top-right: rectangular notch cutout (bend x bend)
 # Bottom-left and bottom-right: 3 mm rounded
+#
+# Shape:
+#   (bend,W) ──────────────── (L-bend,W)   ← top edge
+#      │                           │
+#   (bend,W-bend)         (L-bend,W-bend)  ← notch inner level
+#      │                           │
+#   (0,W-bend) ─── ... ─── (L,W-bend)     ← sides continue down
+#      │                           │
+#   (0,R) ──────────────────── (L,R)       ← bottom rounded corners
 # =========================================================
-def draw_outline_w(msp, L, W, R=3.0):
+def draw_outline_w(msp, L, W, bend, R=3.0):
     BULGE = 0.41421356
     points = [
-        (R,   0,   0, 0, 0),      # bottom edge start (after bottom-left arc)
-        (L-R, 0,   0, 0, BULGE),  # before bottom-right arc
-        (L,   R,   0, 0, 0),      # bottom-right arc end → up right side
-        (L,   W,   0, 0, 0),      # top-right sharp corner
-        (0,   W,   0, 0, 0),      # top-left sharp corner
-        (0,   R,   0, 0, BULGE),  # before bottom-left arc
+        # Bottom edge — left to right
+        (R,          0,        0, 0, 0),      # bottom-left arc end
+        (L-R,        0,        0, 0, BULGE),  # before bottom-right arc
+        (L,          R,        0, 0, 0),      # bottom-right arc end
+        # Right side up to notch
+        (L,          W-bend,   0, 0, 0),      # right side stops at notch level
+        (L-bend,     W-bend,   0, 0, 0),      # notch inner corner (right)
+        (L-bend,     W,        0, 0, 0),      # top-right notch top
+        # Top edge
+        (bend,       W,        0, 0, 0),      # top-left notch top
+        (bend,       W-bend,   0, 0, 0),      # notch inner corner (left)
+        # Left side down from notch
+        (0,          W-bend,   0, 0, 0),      # left side starts at notch level
+        (0,          R,        0, 0, BULGE),  # before bottom-left arc
     ]
     msp.add_lwpolyline(
         points,
         format="xyseb",
         dxfattribs={"layer": "OUTLINE", "closed": True}
     )
-
-# =========================================================
-# Bend Fold Lines — Variant W only
-# Two short horizontal lines at actual_bend mm from top edge,
-# left side and right side only
-# =========================================================
-def draw_bend_lines_w(msp, L, W, bend):
-    fold_y = W - bend
-    msp.add_line((0, fold_y), (bend, fold_y), dxfattribs={"layer": "BEND"})
-    msp.add_line((L - bend, fold_y), (L, fold_y), dxfattribs={"layer": "BEND"})
 
 # =========================================================
 # Pattern Draw (shared by Variant A and Variant W)
@@ -396,8 +403,8 @@ async def generate_dxf(payload: dict = Body(...)):
     # --- Dimension resolution by variant ---
     if variant == "W":
         # Variant W:
-        # length = horizontal (X axis) — the long side as sent from n8n
-        # width  = vertical   (Y axis) — the short side as sent from n8n
+        # length = horizontal (X axis)
+        # width  = vertical   (Y axis)
         stated_length = float(payload.get("length", 1407))  # horizontal
         stated_width  = float(payload.get("width",   622))  # vertical
         stated_bend   = float(payload.get("bend",      9))
@@ -461,8 +468,8 @@ async def generate_dxf(payload: dict = Body(...)):
 
     # --- Draw outline based on variant ---
     if variant == "W":
-        draw_outline_w(msp, L, W)
-        draw_bend_lines_w(msp, L, W, actual_bend)
+        # Notch cutout at top-left and top-right = actual_bend x actual_bend
+        draw_outline_w(msp, L, W, actual_bend)
     else:
         draw_outline_a(msp, L, W)
 
