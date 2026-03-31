@@ -275,20 +275,7 @@ def draw_outline_a(msp, L, W, R=3.0):
         dxfattribs={"layer": "OUTLINE", "closed": True}
     )
 
-# =========================================================
-# Outline Builder — Variant W
-# Top-left and top-right: rectangular notch cutout (bend x bend)
-# Bottom-left and bottom-right: 3 mm rounded
-#
-# Shape:
-#   (bend,W) ──────────────── (L-bend,W)   ← top edge
-#      │                           │
-#   (bend,W-bend)         (L-bend,W-bend)  ← notch inner level
-#      │                           │
-#   (0,W-bend) ─── ... ─── (L,W-bend)     ← sides continue down
-#      │                           │
-#   (0,R) ──────────────────── (L,R)       ← bottom rounded corners
-# =========================================================
+
 def draw_outline_w(msp, L, W, bend, R=3.0):
     BULGE = 0.41421356
     points = [
@@ -405,9 +392,9 @@ async def generate_dxf(payload: dict = Body(...)):
         # Variant W:
         # length = horizontal (X axis)
         # width  = vertical   (Y axis)
-        stated_length = float(payload.get("length"))  # horizontal
-        stated_width  = float(payload.get("width"))  # vertical
-       stated_bend = float(payload.get("thickness"))
+        stated_length = float(payload.get("length", 1407))  # horizontal
+        stated_width  = float(payload.get("width",   622))  # vertical
+        stated_bend = float(payload.get("thickness", 9))
 
         L           = stated_length - 1.2   # actual horizontal after correction
         W           = stated_width  - 0.6   # actual vertical after correction
