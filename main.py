@@ -394,12 +394,12 @@ async def generate_dxf(payload: dict = Body(...)):
 
     # --- Dimension resolution by variant ---
     if variant == "W":
-        stated_width  = float(payload.get("width",  1294))
-        stated_length = float(payload.get("length",  416))
-        stated_bend   = float(payload.get("bend",      9))
+       stated_length = float(payload.get("length"))  # horizontal (X axis)
+       stated_width  = float(payload.get("width"))  # vertical   (Y axis)
 
-        L           = stated_width  - 1.2
-        W           = stated_length - 0.6
+L = stated_length - 1.2  
+W = stated_width  - 0.6   
+
         actual_bend = stated_bend   - 1.2
 
         output_dir  = "output_dxf_w"
