@@ -405,9 +405,9 @@ async def generate_dxf(payload: dict = Body(...)):
         # Variant W:
         # length = horizontal (X axis)
         # width  = vertical   (Y axis)
-        stated_length = float(payload.get("length", 1407))  # horizontal
-        stated_width  = float(payload.get("width",   622))  # vertical
-        stated_bend   = float(payload.get("bend",      9))
+        stated_length = float(payload.get("length"))  # horizontal
+        stated_width  = float(payload.get("width"))  # vertical
+        stated_bend = float(payload.get("thickness"))
 
         L           = stated_length - 1.2   # actual horizontal after correction
         W           = stated_width  - 0.6   # actual vertical after correction
