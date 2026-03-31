@@ -82,7 +82,6 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
     # 1. LONG SLOTHOLE (Muster L)
     # ---------------------------------------------------------
     if pattern_type == "slot":
-        # Always read from cfg — single source of truth
         SLOT_L = cfg["slot_length"]
         SLOT_H = cfg["slot_width"]
 
@@ -284,12 +283,12 @@ def draw_outline_a(msp, L, W, R=3.0):
 def draw_outline_w(msp, L, W, R=3.0):
     BULGE = 0.41421356
     points = [
-        (R,   0,   0, 0, 0),
-        (L-R, 0,   0, 0, BULGE),
-        (L,   R,   0, 0, 0),
-        (L,   W,   0, 0, 0),
-        (0,   W,   0, 0, 0),
-        (0,   R,   0, 0, BULGE),
+        (R,   0,   0, 0, 0),      # bottom edge start (after bottom-left arc)
+        (L-R, 0,   0, 0, BULGE),  # before bottom-right arc
+        (L,   R,   0, 0, 0),      # bottom-right arc end → up right side
+        (L,   W,   0, 0, 0),      # top-right sharp corner
+        (0,   W,   0, 0, 0),      # top-left sharp corner
+        (0,   R,   0, 0, BULGE),  # before bottom-left arc
     ]
     msp.add_lwpolyline(
         points,
@@ -299,6 +298,8 @@ def draw_outline_w(msp, L, W, R=3.0):
 
 # =========================================================
 # Bend Fold Lines — Variant W only
+# Two short horizontal lines at actual_bend mm from top edge,
+# left side and right side only
 # =========================================================
 def draw_bend_lines_w(msp, L, W, bend):
     fold_y = W - bend
@@ -394,18 +395,22 @@ async def generate_dxf(payload: dict = Body(...)):
 
     # --- Dimension resolution by variant ---
     if variant == "W":
-       stated_length = float(payload.get("length"))  # horizontal (X axis)
-       stated_width  = float(payload.get("width"))  # vertical   (Y axis)
+        # Variant W:
+        # length = horizontal (X axis) — the long side as sent from n8n
+        # width  = vertical   (Y axis) — the short side as sent from n8n
+        stated_length = float(payload.get("length", 1407))  # horizontal
+        stated_width  = float(payload.get("width",   622))  # vertical
+        stated_bend   = float(payload.get("bend",      9))
 
-L = stated_length - 1.2  
-W = stated_width  - 0.6   
-
-        actual_bend = stated_bend   - 1.2
+        L           = stated_length - 1.2   # actual horizontal after correction
+        W           = stated_width  - 0.6   # actual vertical after correction
+        actual_bend = stated_bend   - 1.2   # actual bend after correction
 
         output_dir  = "output_dxf_w"
-        filename_id = f"{int(stated_width)}x{int(stated_length)}"
+        filename_id = f"{int(stated_length)}x{int(stated_width)}"
 
     else:
+        # Variant A: length = horizontal, width = vertical, no corrections
         length   = float(payload.get("length", 500))
         width    = float(payload.get("width",  300))
         bent_top = payload.get("bent_top", False)
@@ -417,16 +422,14 @@ W = stated_width  - 0.6
         filename_id = f"{int(length)}x{int(W)}"
 
     # --- Get pattern config ---
-    # Log the raw_pattern received so we can verify it matches PATTERN_MAP keys
     print(f"[DEBUG] raw_pattern received: '{raw_pattern}'")
     print(f"[DEBUG] available keys: {list(PATTERN_MAP.keys())}")
 
     cfg = PATTERN_MAP.get(raw_pattern)
     if cfg is None:
-        # Pattern not found — return error immediately instead of silently falling back
         return {
             "status": "error",
-            "message": f"Pattern '{raw_pattern}' not found. Available patterns: {list(PATTERN_MAP.keys())}"
+            "message": f"Pattern '{raw_pattern}' not found. Available: {list(PATTERN_MAP.keys())}"
         }
 
     pattern = cfg["pattern"]
@@ -456,14 +459,17 @@ W = stated_width  - 0.6
         if layer_name not in doc.layers:
             doc.layers.new(name=layer_name)
 
+    # --- Draw outline based on variant ---
     if variant == "W":
         draw_outline_w(msp, L, W)
         draw_bend_lines_w(msp, L, W, actual_bend)
     else:
         draw_outline_a(msp, L, W)
 
+    # --- Draw pattern ---
     draw_pattern(msp, layout, cfg, pattern, L, layout_width)
 
+    # --- Save and return ---
     doc.saveas(filename)
     with open(filename, "rb") as f:
         response = {
@@ -474,8 +480,8 @@ W = stated_width  - 0.6
         }
 
     if variant == "W":
-        response["actual_width"]  = L
-        response["actual_length"] = W
+        response["actual_length"] = L
+        response["actual_width"]  = W
         response["actual_bend"]   = actual_bend
 
     return response
