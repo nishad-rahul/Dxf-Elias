@@ -275,24 +275,33 @@ def draw_outline_a(msp, L, W, R=3.0):
         dxfattribs={"layer": "OUTLINE", "closed": True}
     )
 
-
+# =========================================================
+# Outline Builder — Variant W
+# Top-left and top-right: rectangular notch cutout (bend x bend)
+# Bottom-left and bottom-right: 3 mm rounded
+#
+# Shape:
+#   (bend,W) ──────────────── (L-bend,W)   <- top edge
+#      |                           |
+#   (bend,W-bend)         (L-bend,W-bend)  <- notch inner level
+#      |                           |
+#   (0,W-bend)                 (L,W-bend)  <- sides continue down
+#      |                           |
+#   rounded                    rounded     <- bottom corners
+# =========================================================
 def draw_outline_w(msp, L, W, bend, R=3.0):
     BULGE = 0.41421356
     points = [
-        # Bottom edge — left to right
-        (R,          0,        0, 0, 0),      # bottom-left arc end
-        (L-R,        0,        0, 0, BULGE),  # before bottom-right arc
-        (L,          R,        0, 0, 0),      # bottom-right arc end
-        # Right side up to notch
-        (L,          W-bend,   0, 0, 0),      # right side stops at notch level
-        (L-bend,     W-bend,   0, 0, 0),      # notch inner corner (right)
-        (L-bend,     W,        0, 0, 0),      # top-right notch top
-        # Top edge
-        (bend,       W,        0, 0, 0),      # top-left notch top
-        (bend,       W-bend,   0, 0, 0),      # notch inner corner (left)
-        # Left side down from notch
-        (0,          W-bend,   0, 0, 0),      # left side starts at notch level
-        (0,          R,        0, 0, BULGE),  # before bottom-left arc
+        (R,        0,        0, 0, 0),      # bottom-left arc end
+        (L-R,      0,        0, 0, BULGE),  # before bottom-right arc
+        (L,        R,        0, 0, 0),      # bottom-right arc end
+        (L,        W-bend,   0, 0, 0),      # right side up to notch level
+        (L-bend,   W-bend,   0, 0, 0),      # notch inner corner (right)
+        (L-bend,   W,        0, 0, 0),      # top-right notch top
+        (bend,     W,        0, 0, 0),      # top-left notch top
+        (bend,     W-bend,   0, 0, 0),      # notch inner corner (left)
+        (0,        W-bend,   0, 0, 0),      # left side starts at notch level
+        (0,        R,        0, 0, BULGE),  # before bottom-left arc
     ]
     msp.add_lwpolyline(
         points,
@@ -390,21 +399,22 @@ async def generate_dxf(payload: dict = Body(...)):
     # --- Dimension resolution by variant ---
     if variant == "W":
         # Variant W:
-        # length = horizontal (X axis)
-        # width  = vertical   (Y axis)
-        stated_length = float(payload.get("length", 1407))  # horizontal
-        stated_width  = float(payload.get("width",   622))  # vertical
-        stated_bend = float(payload.get("thickness", 9))
+        # length    = horizontal (X axis)
+        # width     = vertical   (Y axis)
+        # thickness = bend flap
+        stated_length = float(payload.get("length",    1294))  # horizontal
+        stated_width  = float(payload.get("width",      416))  # vertical
+        stated_bend   = float(payload.get("thickness",    9))  # bend from thickness field
 
-        L           = stated_length - 1.2   # actual horizontal after correction
-        W           = stated_width  - 0.6   # actual vertical after correction
-        actual_bend = stated_bend   - 1.2   # actual bend after correction
+        L           = stated_length - 1.2   # e.g. 1294 → 1292.8 mm
+        W           = stated_width  - 0.6   # e.g. 416  → 415.4  mm
+        actual_bend = stated_bend   - 1.2   # e.g. 9    → 7.8    mm
 
         output_dir  = "output_dxf_w"
         filename_id = f"{int(stated_length)}x{int(stated_width)}"
 
     else:
-        # Variant A: length = horizontal, width = vertical, no corrections
+        # Variant A: no corrections
         length   = float(payload.get("length", 500))
         width    = float(payload.get("width",  300))
         bent_top = payload.get("bent_top", False)
@@ -437,6 +447,7 @@ async def generate_dxf(payload: dict = Body(...)):
     layout_width  = float(payload.get("width", 300)) if variant == "A" else W
     layout = calculate_layout_params(layout_length, layout_width, hole_w, cfg["spacing"], pattern, cfg)
 
+    print(f"[DEBUG] variant={variant}, L={L}, W={W}")
     print(f"[DEBUG] layout: {layout}")
 
     # --- Build DXF ---
@@ -446,16 +457,13 @@ async def generate_dxf(payload: dict = Body(...)):
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
 
-    layers = ["OUTLINE", "PATTERN"]
-    if variant == "W":
-        layers.append("BEND")
-    for layer_name in layers:
+    for layer_name in ["OUTLINE", "PATTERN", "BEND"]:
         if layer_name not in doc.layers:
             doc.layers.new(name=layer_name)
 
     # --- Draw outline based on variant ---
     if variant == "W":
-        # Notch cutout at top-left and top-right = actual_bend x actual_bend
+        # Rectangular notch at top-left and top-right = actual_bend x actual_bend
         draw_outline_w(msp, L, W, actual_bend)
     else:
         draw_outline_a(msp, L, W)
