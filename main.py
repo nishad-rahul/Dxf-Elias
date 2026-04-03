@@ -335,23 +335,7 @@ def draw_outline_w(msp, L_outer, W_outer, bend, R=3.0):
 # Two vertical dashed lines at x=bend and x=L_outer-bend
 # running full height of sheet (W_outer), on BEND layer
 # =========================================================
-def draw_bend_lines_w(msp, L_outer, W_outer, bend):
-    """
-    Draw vertical fold/bend indicator lines at the two flange positions.
-    These sit on the BEND layer so they can be styled differently in CAM.
-    """
-    # Left bend line
-    msp.add_line(
-        (bend, 0),
-        (bend, W_outer),
-        dxfattribs={"layer": "BEND"}
-    )
-    # Right bend line
-    msp.add_line(
-        (L_outer - bend, 0),
-        (L_outer - bend, W_outer),
-        dxfattribs={"layer": "BEND"}
-    )
+
 
 # =========================================================
 # Pattern Draw (shared by Variant A and Variant W)
@@ -552,9 +536,6 @@ async def generate_dxf(payload: dict = Body(...)):
     if variant == "W":
         # Outline uses full outer dimensions
         draw_outline_w(msp, L_outer, W_outer, actual_bend)
-
-        # Bend indicator lines on BEND layer
-        draw_bend_lines_w(msp, L_outer, W_outer, actual_bend)
 
         # Pattern drawn within inner zone, offset by actual_bend on X axis
         draw_pattern(msp, layout, cfg, pattern, L_inner, W_inner, x_offset=actual_bend)
