@@ -308,22 +308,18 @@ def draw_outline_w(msp, L_outer, W_outer, bend, R=3.0):
     W_outer  = W_inner + bend       (full sheet height including top flange)
     bend     = actual_bend = stated_thickness - 1.2
     """
-    BULGE = 0.41421356
     W_inner = W_outer - bend   # bottom of the notch / top of perforation zone
 
     points = [
-        # Start at bottom-left arc end, going clockwise
-        (R,              0,        0, 0, 0),       # bottom-left arc end → go right
-        (L_outer - R,    0,        0, 0, BULGE),   # before bottom-right arc
-        (L_outer,        R,        0, 0, 0),       # bottom-right arc end → go up
-        (L_outer,        W_inner,  0, 0, 0),       # right side up to notch level
-        (L_outer - bend, W_inner,  0, 0, 0),       # notch inner corner (right)
-        (L_outer - bend, W_outer,  0, 0, 0),       # top-right notch top edge
-        (bend,           W_outer,  0, 0, 0),       # top-left notch top edge
-        (bend,           W_inner,  0, 0, 0),       # notch inner corner (left)
-        (0,              W_inner,  0, 0, 0),       # left side starts at notch level
-        (0,              R,        0, 0, BULGE),   # before bottom-left arc
-    ]
+    (0,              0,        0, 0, 0),
+    (L_outer,        0,        0, 0, 0),
+    (L_outer,        W_inner,  0, 0, 0),
+    (L_outer - bend, W_inner,  0, 0, 0),
+    (L_outer - bend, W_outer,  0, 0, 0),
+    (bend,           W_outer,  0, 0, 0),
+    (bend,           W_inner,  0, 0, 0),
+    (0,              W_inner,  0, 0, 0),
+]
     msp.add_lwpolyline(
         points,
         format="xyseb",
