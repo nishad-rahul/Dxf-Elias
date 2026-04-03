@@ -260,6 +260,7 @@ def calculate_layout_params(sheet_length, sheet_width, item_size, spacing, patte
 def draw_outline_a(msp, L, W, R=3.0):
     BULGE = 0.41421356
     points = [
+        (R,   0,   0, 0, 0),
         (L-R, 0,   0, 0, BULGE),
         (L,   R,   0, 0, 0),
         (L,   W-R, 0, 0, BULGE),
@@ -267,7 +268,6 @@ def draw_outline_a(msp, L, W, R=3.0):
         (R,   W,   0, 0, BULGE),
         (0,   W-R, 0, 0, 0),
         (0,   R,   0, 0, BULGE),
-        (R,   0,   0, 0, 0),
     ]
     msp.add_lwpolyline(
         points,
@@ -277,31 +277,52 @@ def draw_outline_a(msp, L, W, R=3.0):
 
 # =========================================================
 # Outline Builder — Variant W
-# Top-left and top-right: rectangular notch cutout (bend x bend)
-# Bottom-left and bottom-right: 3 mm rounded
 #
-# Shape:
-#   (bend,W) ──────────────── (L-bend,W)   <- top edge
-#      |                           |
-#   (bend,W-bend)         (L-bend,W-bend)  <- notch inner level
-#      |                           |
-#   (0,W-bend)                 (L,W-bend)  <- sides continue down
-#      |                           |
-#   rounded                    rounded     <- bottom corners
+# Outer sheet dimensions: L_outer x W_outer
+# Notch cutout at top-left and top-right: bend x bend
+# This leaves the inner perforation zone: L_inner x W_inner
+# where:
+#   L_inner = L_outer - 2 * bend  (horizontal)
+#   W_inner = W_outer - bend       (vertical, bend only at top)
+#
+# Shape (origin at bottom-left):
+#
+#   (0, W_outer) ← not a point, notch cuts here
+#
+#   (0, W_outer)          (L_outer, W_outer)   <- does not exist (notch cuts)
+#
+#   (bend, W_outer) ────────── (L_outer-bend, W_outer)   <- top edge between notches
+#       |                               |
+#   (bend, W_inner) ──────────── (L_outer-bend, W_inner) <- notch inner corners
+#       |                               |
+#   (0, W_inner)                 (L_outer, W_inner)      <- sides resume
+#       |                               |
+#   rounded                         rounded               <- bottom corners (R=3mm)
+#
+# Bottom-left:  (0, R) arc to (R, 0)
+# Bottom-right: (L_outer-R, 0) arc to (L_outer, R)
 # =========================================================
-def draw_outline_w(msp, L, W, bend, R=3.0):
+def draw_outline_w(msp, L_outer, W_outer, bend, R=3.0):
+    """
+    L_outer  = L_inner + 2 * bend  (full sheet width including both flanges)
+    W_outer  = W_inner + bend       (full sheet height including top flange)
+    bend     = actual_bend = stated_thickness - 1.2
+    """
     BULGE = 0.41421356
+    W_inner = W_outer - bend   # bottom of the notch / top of perforation zone
+
     points = [
-        (R,        0,        0, 0, 0),      # bottom-left arc end
-        (L-R,      0,        0, 0, BULGE),  # before bottom-right arc
-        (L,        R,        0, 0, 0),      # bottom-right arc end
-        (L,        W-bend,   0, 0, 0),      # right side up to notch level
-        (L-bend,   W-bend,   0, 0, 0),      # notch inner corner (right)
-        (L-bend,   W,        0, 0, 0),      # top-right notch top
-        (bend,     W,        0, 0, 0),      # top-left notch top
-        (bend,     W-bend,   0, 0, 0),      # notch inner corner (left)
-        (0,        W-bend,   0, 0, 0),      # left side starts at notch level
-        (0,        R,        0, 0, BULGE),  # before bottom-left arc
+        # Start at bottom-left arc end, going clockwise
+        (R,              0,        0, 0, 0),       # bottom-left arc end → go right
+        (L_outer - R,    0,        0, 0, BULGE),   # before bottom-right arc
+        (L_outer,        R,        0, 0, 0),       # bottom-right arc end → go up
+        (L_outer,        W_inner,  0, 0, 0),       # right side up to notch level
+        (L_outer - bend, W_inner,  0, 0, 0),       # notch inner corner (right)
+        (L_outer - bend, W_outer,  0, 0, 0),       # top-right notch top edge
+        (bend,           W_outer,  0, 0, 0),       # top-left notch top edge
+        (bend,           W_inner,  0, 0, 0),       # notch inner corner (left)
+        (0,              W_inner,  0, 0, 0),       # left side starts at notch level
+        (0,              R,        0, 0, BULGE),   # before bottom-left arc
     ]
     msp.add_lwpolyline(
         points,
@@ -310,12 +331,52 @@ def draw_outline_w(msp, L, W, bend, R=3.0):
     )
 
 # =========================================================
-# Pattern Draw (shared by Variant A and Variant W)
-# Slot dimensions always read from cfg — never hardcoded
+# BEND Layer Lines — Variant W
+# Two vertical dashed lines at x=bend and x=L_outer-bend
+# running full height of sheet (W_outer), on BEND layer
 # =========================================================
-def draw_pattern(msp, layout, cfg, pattern, L, W):
+def draw_bend_lines_w(msp, L_outer, W_outer, bend):
+    """
+    Draw vertical fold/bend indicator lines at the two flange positions.
+    These sit on the BEND layer so they can be styled differently in CAM.
+    """
+    # Left bend line
+    msp.add_line(
+        (bend, 0),
+        (bend, W_outer),
+        dxfattribs={"layer": "BEND"}
+    )
+    # Right bend line
+    msp.add_line(
+        (L_outer - bend, 0),
+        (L_outer - bend, W_outer),
+        dxfattribs={"layer": "BEND"}
+    )
+
+# =========================================================
+# Pattern Draw (shared by Variant A and Variant W)
+# For Variant W: pattern is drawn within the inner zone only.
+# The inner zone starts at x=bend (left flange offset) and
+# spans L_inner = L_outer - 2*bend horizontally,
+# and from y=0 to y=W_inner vertically.
+# =========================================================
+def draw_pattern(msp, layout, cfg, pattern, L, W, x_offset=0.0):
+    """
+    x_offset: for Variant W, pass actual_bend so pattern starts
+              after the left flange. For Variant A, pass 0.
+    L:        inner zone width  (1292.8 for the example)
+    W:        inner zone height (415.4 for the example)
+    """
     draw_hole_w = cfg["slot_length"] if pattern == "slot" else cfg.get("hole_size", 10)
     draw_hole_h = cfg["slot_width"]  if pattern == "slot" else cfg.get("hole_size", 10)
+
+    # Bounding size used for boundary checks
+    if pattern == "diamond":
+        bounding_w = draw_hole_w * math.sqrt(2)
+        bounding_h = draw_hole_h * math.sqrt(2)
+    else:
+        bounding_w = draw_hole_w
+        bounding_h = draw_hole_h
 
     y = layout["margin_y"]
 
@@ -330,16 +391,21 @@ def draw_pattern(msp, layout, cfg, pattern, L, W):
 
         if layout.get("is_grouped", False):
             for g in range(layout["num_groups"]):
-                g_start = layout["margin_x"] + (g * layout["group_stride"])
+                g_start = x_offset + layout["margin_x"] + (g * layout["group_stride"])
                 for c in range(layout["cols_per_group"]):
                     x = g_start + (c * layout["pitch_x"])
+                    # Boundary check against inner zone
+                    if x + draw_hole_w > x_offset + L:
+                        continue
+                    if y + draw_hole_h > W:
+                        continue
                     msp.add_lwpolyline(
                         [(x, y), (x+draw_hole_w, y), (x+draw_hole_w, y+draw_hole_h),
                          (x, y+draw_hole_h), (x, y)],
                         dxfattribs={"layer": "PATTERN"}
                     )
         else:
-            x_start = layout["margin_x"] + row_off
+            x_start = x_offset + layout["margin_x"] + row_off
             current_count = layout["count_x"]
             if is_offset_row:
                 current_count -= 1
@@ -347,9 +413,10 @@ def draw_pattern(msp, layout, cfg, pattern, L, W):
             for c in range(current_count):
                 x = x_start + (c * layout["pitch_x"])
 
-                if x + draw_hole_w > L:
+                # Boundary check uses bounding_w (correct for diamonds)
+                if x + bounding_w > x_offset + L:
                     continue
-                if y + draw_hole_h > W:
+                if y + bounding_h > W:
                     continue
 
                 if pattern == "square":
@@ -398,17 +465,30 @@ async def generate_dxf(payload: dict = Body(...)):
 
     # --- Dimension resolution by variant ---
     if variant == "W":
-        # Variant W:
-        # length    = horizontal (X axis)
-        # width     = vertical   (Y axis)
-        # thickness = bend flap
-        stated_length = float(payload.get("length",    1294))  # horizontal
-        stated_width  = float(payload.get("width",      416))  # vertical
-        stated_bend   = float(payload.get("thickness",    9))  # bend from thickness field
+        # Variant W inputs:
+        #   length    = stated horizontal finished size (e.g. 1294mm)
+        #   width     = stated vertical finished size   (e.g. 416mm)
+        #   thickness = bend flange size                (e.g. 9mm)
+        #
+        # Corrections:
+        #   L_inner   = stated_length - 1.2   → perforation zone width
+        #   W_inner   = stated_width  - 0.6   → perforation zone height
+        #   actual_bend = stated_bend - 1.2   → flange size after correction
+        #
+        # Outer sheet (what gets drawn as outline):
+        #   L_outer = L_inner + 2 * actual_bend  (flanges on left AND right)
+        #   W_outer = W_inner + actual_bend       (flange only on top)
 
-        L           = stated_length - 1.2   # e.g. 1294 → 1292.8 mm
-        W           = stated_width  - 0.6   # e.g. 416  → 415.4  mm
-        actual_bend = stated_bend   - 1.2   # e.g. 9    → 7.8    mm
+        stated_length = float(payload.get("length",    1294))
+        stated_width  = float(payload.get("width",      416))
+        stated_bend   = float(payload.get("thickness",    9))
+
+        L_inner     = stated_length - 1.2        # e.g. 1294 → 1292.8 mm
+        W_inner     = stated_width  - 0.6        # e.g. 416  → 415.4  mm
+        actual_bend = stated_bend   - 1.2        # e.g. 9    → 7.8    mm
+
+        L_outer     = L_inner + 2 * actual_bend  # e.g. 1292.8 + 15.6 = 1308.4 mm
+        W_outer     = W_inner + actual_bend      # e.g. 415.4  + 7.8  = 423.2  mm
 
         output_dir  = "output_dxf_w"
         filename_id = f"{int(stated_length)}x{int(stated_width)}"
@@ -440,14 +520,21 @@ async def generate_dxf(payload: dict = Body(...)):
     print(f"[DEBUG] resolved pattern type: '{pattern}', cfg: {cfg}")
 
     hole_w = cfg["slot_length"] if pattern == "slot" else cfg.get("hole_size", 10)
-    hole_h = cfg["slot_width"]  if pattern == "slot" else hole_w
 
-    # --- Calculate layout ---
-    layout_length = L
-    layout_width  = float(payload.get("width", 300)) if variant == "A" else W
-    layout = calculate_layout_params(layout_length, layout_width, hole_w, cfg["spacing"], pattern, cfg)
+    # --- Calculate layout against inner zone dimensions ---
+    if variant == "W":
+        layout = calculate_layout_params(
+            L_inner, W_inner, hole_w, cfg["spacing"], pattern, cfg
+        )
+    else:
+        layout_width = float(payload.get("width", 300)) if variant == "A" else W
+        layout = calculate_layout_params(L, layout_width, hole_w, cfg["spacing"], pattern, cfg)
 
-    print(f"[DEBUG] variant={variant}, L={L}, W={W}")
+    if variant == "W":
+        print(f"[DEBUG] variant=W, L_inner={L_inner}, W_inner={W_inner}, "
+              f"L_outer={L_outer}, W_outer={W_outer}, actual_bend={actual_bend}")
+    else:
+        print(f"[DEBUG] variant=A, L={L}, W={W}")
     print(f"[DEBUG] layout: {layout}")
 
     # --- Build DXF ---
@@ -461,15 +548,20 @@ async def generate_dxf(payload: dict = Body(...)):
         if layer_name not in doc.layers:
             doc.layers.new(name=layer_name)
 
-    # --- Draw outline based on variant ---
+    # --- Draw outline and pattern based on variant ---
     if variant == "W":
-        # Rectangular notch at top-left and top-right = actual_bend x actual_bend
-        draw_outline_w(msp, L, W, actual_bend)
+        # Outline uses full outer dimensions
+        draw_outline_w(msp, L_outer, W_outer, actual_bend)
+
+        # Bend indicator lines on BEND layer
+        draw_bend_lines_w(msp, L_outer, W_outer, actual_bend)
+
+        # Pattern drawn within inner zone, offset by actual_bend on X axis
+        draw_pattern(msp, layout, cfg, pattern, L_inner, W_inner, x_offset=actual_bend)
+
     else:
         draw_outline_a(msp, L, W)
-
-    # --- Draw pattern ---
-    draw_pattern(msp, layout, cfg, pattern, L, layout_width)
+        draw_pattern(msp, layout, cfg, pattern, L, W, x_offset=0.0)
 
     # --- Save and return ---
     doc.saveas(filename)
@@ -482,8 +574,10 @@ async def generate_dxf(payload: dict = Body(...)):
         }
 
     if variant == "W":
-        response["actual_length"] = L
-        response["actual_width"]  = W
-        response["actual_bend"]   = actual_bend
+        response["L_inner"]     = L_inner
+        response["W_inner"]     = W_inner
+        response["L_outer"]     = L_outer
+        response["W_outer"]     = W_outer
+        response["actual_bend"] = actual_bend
 
     return response
