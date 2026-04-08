@@ -32,6 +32,14 @@ PATTERN_MAP = {
     },
 }
 
+PATTERN_CODE_MAP = {
+    "Squares 10x10mm":      "Q",
+    "Squares Grouped":      "Q+",
+    "Check 10x10mm":        "K",
+    "Round hole 10mm":      "O",
+    "Slotted hole 35x10mm": "L",
+}
+
 # =========================================================
 # Helper: Natural Layout Finder (shared)
 # =========================================================
@@ -470,8 +478,9 @@ async def generate_dxf(payload: dict = Body(...)):
         L_outer     = L_inner + 2 * actual_bend  # e.g. 1292.8 + 15.6 = 1308.4 mm
         W_outer     = W_inner + actual_bend      # e.g. 415.4  + 7.8  = 423.2  mm
 
+        # Variant W
         output_dir  = "output_dxf_w"
-        filename_id = f"{int(stated_length)}x{int(stated_width)}"
+        filename_id = f"{customer}_W_{pattern_code}_{int(stated_length)}x{int(stated_width)}x{int(stated_bend)}"
 
     else:
         # Variant A: no corrections
@@ -482,8 +491,9 @@ async def generate_dxf(payload: dict = Body(...)):
         L = length
         W = width + 5.1 if bent_top else width
 
+       # Variant A
         output_dir  = "output_dxf"
-        filename_id = f"{int(length)}x{int(W)}"
+        filename_id = f"{customer}_A_{pattern_code}_{int(length)}x{int(width)}x1"
 
     # --- Get pattern config ---
     print(f"[DEBUG] raw_pattern received: '{raw_pattern}'")
