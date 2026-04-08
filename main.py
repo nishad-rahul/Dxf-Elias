@@ -450,6 +450,7 @@ async def generate_dxf(payload: dict = Body(...)):
     customer    = str(payload.get("customer", "Standard")).replace(" ", "_")
     raw_pattern = payload.get("pattern", "Squares 10x10mm")
     variant     = str(payload.get("variant", "A")).upper()
+    pattern_code = PATTERN_CODE_MAP.get(raw_pattern, "X")
 
     # --- Dimension resolution by variant ---
     if variant == "W":
@@ -529,7 +530,7 @@ async def generate_dxf(payload: dict = Body(...)):
 
     # --- Build DXF ---
     os.makedirs(output_dir, exist_ok=True)
-    filename = f"{output_dir}/{customer}_{filename_id}.dxf"
+    filename = f"{output_dir}/{filename_id}.dxf"
 
     doc = ezdxf.new("R2010")
     msp = doc.modelspace()
